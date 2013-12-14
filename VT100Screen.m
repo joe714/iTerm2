@@ -1739,14 +1739,24 @@ static char* FormatCont(int c)
     // Our iTerm specific codes
     case ITERM_GROWL:
         if (GROWL) {
-            [gd growlNotify:NSLocalizedStringFromTableInBundle(@"Alert",
-                                                               @"iTerm",
-                                                               [NSBundle bundleForClass:[self class]],
-                                                               @"Growl Alerts")
+            // Take the chunk after a RECORD SEPARATOR as the title,
+            // and reserve the rest for future-proofing.
+            NSArray *split = [token.u.string componentsSeparatedByString:@"\036"];
+            NSString *description = [split objectAtIndex:0];
+            NSString *title;
+            if ([split count] > 1) {
+                title = [split objectAtIndex:1];
+            } else {
+                title = NSLocalizedStringFromTableInBundle(@"Alert",
+                                                           @"iTerm",
+                                                           [NSBundle bundleForClass:[self class]],
+                                                           @"Growl Alerts");
+            }
+            [gd growlNotify:title
             withDescription:[NSString stringWithFormat:@"Session %@ #%d: %@",
                              [SESSION name],
                              [[SESSION tab] realObjectCount],
-                             token.u.string]
+                             description]
             andNotification:@"Customized Message"
                  andSession:SESSION];
         }
