@@ -25,11 +25,13 @@
 #import <Cocoa/Cocoa.h>
 #import "ProfileModel.h"
 #import "ProfileTableView.h"
+#import "FutureMethods.h"
 
 @class ProfileModelWrapper;
 @class iTermSearchField;
 @class ProfileTableRow;
 @class ProfileTableView;
+@class ProfileListView;
 
 @protocol ProfileListViewDelegate
 @optional
@@ -43,6 +45,9 @@
 
 @optional
 - (NSMenu*)profileTable:(id)profileTable menuForEvent:(NSEvent*)theEvent;
+
+@optional
+- (void)profileTableFilterDidChange:(ProfileListView *)profileListView;
 @end
 
 @interface ProfileListView : NSView <
@@ -75,6 +80,7 @@
 - (ProfileModelWrapper*)dataSource;
 - (void)setUnderlyingDatasource:(ProfileModel*)dataSource;
 - (void)focusSearchField;
+- (BOOL)searchFieldHasText;
 
 // Drag drop
 - (BOOL)tableView:(NSTableView *)tv writeRowsWithIndexes:(NSIndexSet *)rowIndexes toPasteboard:(NSPasteboard*)pboard;
@@ -88,10 +94,8 @@
 - (CGFloat)tableView:(NSTableView *)tableView heightOfRow:(NSInteger)rowIndex;
 - (id)tableView:(NSTableView *)aTableView objectValueForTableColumn:(NSTableColumn *)aTableColumn row:(NSInteger)rowIndex;
 - (BOOL)selectionShouldChangeInTableView:(NSTableView *)aTableView;
-- (NSDragOperation)tableView:(NSTableView *)aTableView validateDrop:(id < NSDraggingInfo >)info proposedRow:(NSInteger)row proposedDropOperation:(NSTableViewDropOperation)operation;
 
 // Delegate methods
-- (BOOL)selectionShouldChangeInTableView:(NSTableView *)aTableView;
 - (void)tableViewSelectionDidChange:(NSNotification *)aNotification;
 
 // Don't use this if you've called allowMultipleSelections.

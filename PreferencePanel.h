@@ -30,6 +30,8 @@
 #import "WindowArrangements.h"
 #import "TriggerController.h"
 #import "SmartSelectionController.h"
+#import "FutureMethods.h"
+#import "PTYTextViewDataSource.h"
 
 #define OPT_NORMAL 0
 #define OPT_META   1
@@ -60,8 +62,6 @@
 @class TriggerController;
 @class SmartSelectionController;
 @class TrouterPrefsController;
-
-typedef enum { CURSOR_UNDERLINE, CURSOR_VERTICAL, CURSOR_BOX } ITermCursorType;
 
 @interface PreferencePanel : NSWindowController <
     ProfileListViewDelegate,
@@ -101,6 +101,10 @@ typedef enum { CURSOR_UNDERLINE, CURSOR_VERTICAL, CURSOR_BOX } ITermCursorType;
     int defaultTabViewType;
 
     IBOutlet NSTextField* tagFilter;
+
+    // Allow clipboard access by terminal applications
+    IBOutlet NSButton *allowClipboardAccessFromTerminal;
+    BOOL defaultAllowClipboardAccess;
 
     // Copy to clipboard on selection
     IBOutlet NSButton *selectionCopiesText;
@@ -157,8 +161,12 @@ typedef enum { CURSOR_UNDERLINE, CURSOR_VERTICAL, CURSOR_BOX } ITermCursorType;
     BOOL defaultCmdSelection;
 
     // pass on ctrl-click
-    IBOutlet NSButton* passOnControlLeftClick;
+    IBOutlet NSButton* controlLeftClickActsLikeRightClick;
     BOOL defaultPassOnControlLeftClick;
+
+    // Opt-click moves cursor
+    IBOutlet NSButton *optionClickMovesCursor;
+    BOOL defaultOptionClickMovesCursor;
 
     // Zoom vertically only
     IBOutlet NSButton *maxVertically;
@@ -180,6 +188,10 @@ typedef enum { CURSOR_UNDERLINE, CURSOR_VERTICAL, CURSOR_BOX } ITermCursorType;
     IBOutlet NSButton *highlightTabLabels;
     BOOL defaultHighlightTabLabels;
 
+	// Hide menu bar in non-lion fullscreen
+	IBOutlet NSButton *hideMenuBarInFullscreen;
+	BOOL defaultHideMenuBarInFullscreen;
+	
     // Advanced font rendering
     IBOutlet NSButton* advancedFontRendering;
     BOOL defaultAdvancedFontRendering;
@@ -276,6 +288,10 @@ typedef enum { CURSOR_UNDERLINE, CURSOR_VERTICAL, CURSOR_BOX } ITermCursorType;
     // smart window placement
     IBOutlet NSButton *smartPlacement;
     BOOL defaultSmartPlacement;
+
+    // Adjust window size when changing font size
+    IBOutlet NSButton *adjustWindowForFontSizeChange;
+    BOOL defaultAdjustWindowForFontSizeChange;
 
     // Delay before showing tabs in fullscreen mode
     IBOutlet NSSlider* fsTabDelay;
@@ -446,6 +462,7 @@ typedef enum { CURSOR_UNDERLINE, CURSOR_VERTICAL, CURSOR_BOX } ITermCursorType;
     IBOutlet NSButton* blinkAllowed;
     IBOutlet NSButton* useBoldFont;
     IBOutlet NSButton* useBrightBold;
+    IBOutlet NSButton* useItalicFont;
     IBOutlet NSSlider *transparency;
     IBOutlet NSSlider *blend;
     IBOutlet NSButton* blur;
@@ -454,6 +471,7 @@ typedef enum { CURSOR_UNDERLINE, CURSOR_VERTICAL, CURSOR_BOX } ITermCursorType;
     IBOutlet NSButton* nonasciiAntiAliased;
     IBOutlet NSButton* backgroundImage;
     NSString* backgroundImageFilename;
+    IBOutlet NSButton* backgroundImageTiled;
     IBOutlet NSImageView* backgroundImagePreview;
     IBOutlet NSTextField* displayFontsLabel;
     IBOutlet NSButton* displayRegularFontButton;
@@ -465,6 +483,7 @@ typedef enum { CURSOR_UNDERLINE, CURSOR_VERTICAL, CURSOR_BOX } ITermCursorType;
 
     // Terminal tab
     IBOutlet NSButton* disableWindowResizing;
+    IBOutlet NSButton* preventTab;
     IBOutlet NSButton* hideAfterOpening;
     IBOutlet NSButton* syncTitle;
     IBOutlet NSButton* closeSessionsOnEnd;
@@ -474,6 +493,7 @@ typedef enum { CURSOR_UNDERLINE, CURSOR_VERTICAL, CURSOR_BOX } ITermCursorType;
     IBOutlet NSButton* flashingBell;
     IBOutlet NSButton* xtermMouseReporting;
     IBOutlet NSButton* disableSmcupRmcup;
+    IBOutlet NSButton* allowTitleReporting;
     IBOutlet NSButton* disablePrinting;
     IBOutlet NSButton* scrollbackWithStatusBar;
     IBOutlet NSButton* scrollbackInAlternateScreen;
@@ -483,6 +503,7 @@ typedef enum { CURSOR_UNDERLINE, CURSOR_VERTICAL, CURSOR_BOX } ITermCursorType;
     IBOutlet NSComboBox* terminalType;
     IBOutlet NSPopUpButton* characterEncoding;
     IBOutlet NSButton* setLocaleVars;
+    IBOutlet NSButton* useCanonicalParser;
 
     // Keyboard tab
     IBOutlet NSTableView* keyMappings;
@@ -581,12 +602,10 @@ typedef enum {
 + (void)populatePopUpButtonWithBookmarks:(NSPopUpButton*)button selectedGuid:(NSString*)selectedGuid;
 
 - (BOOL)loadPrefs;
-- (id)initWithDataSource:(ProfileModel*)model userDefaults:(NSUserDefaults*)userDefaults;
 
 - (void)triggerChanged:(TriggerController *)triggerController;
 - (void)smartSelectionChanged:(SmartSelectionController *)smartSelectionController;
 
-- (void)setOneBookmarkOnly;
 - (void)awakeFromNib;
 - (void)handleWindowWillCloseNotification:(NSNotification *)notification;
 - (void)genericCloseSheet:(NSWindow *)sheet returnCode:(int)returnCode contextInfo:(void *)contextInfo;
@@ -604,23 +623,20 @@ typedef enum {
 - (BOOL)keySheetIsOpen;
 - (WindowArrangements *)arrangements;
 - (IBAction)closeKeyMapping:(id)sender;
-- (BOOL)validateToolbarItem:(NSToolbarItem *)theItem;
-- (NSToolbarItem *)toolbar:(NSToolbar *)toolbar itemForItemIdentifier:(NSString *)itemIdentifier willBeInsertedIntoToolbar:(BOOL)flag;
-- (NSArray *)toolbarAllowedItemIdentifiers:(NSToolbar *)toolbar;
-- (NSArray *)toolbarDefaultItemIdentifiers:(NSToolbar *)toolbar;
-- (NSArray *)toolbarSelectableItemIdentifiers: (NSToolbar *)toolbar;
-- (void)dealloc;
 - (void)readPreferences;
 - (void)savePreferences;
 - (void)run;
 - (IBAction)settingChanged:(id)sender;
 - (float)fsTabDelay;
+- (BOOL)trimTrailingWhitespace;
 - (BOOL)advancedFontRendering;
 - (float)strokeThickness;
 - (int)modifierTagToMask:(int)tag;
 - (void)windowWillLoad;
 - (void)windowWillClose:(NSNotification *)aNotification;
 - (void)windowDidBecomeKey:(NSNotification *)aNotification;
+- (BOOL)allowClipboardAccess;
+- (void)setAllowClipboardAccess:(BOOL)flag;
 - (BOOL)copySelection;
 - (BOOL)copyLastNewline;
 - (void)setCopySelection:(BOOL)flag;
@@ -642,12 +658,14 @@ typedef enum {
 // when there was a global growl setting as well as a per-profile setting).
 - (BOOL)enableGrowl;
 - (BOOL)cmdSelection;
+- (BOOL)optionClickMovesCursor;
 - (BOOL)passOnControlLeftClick;
 - (BOOL)maxVertically;
 - (BOOL)closingHotkeySwitchesSpaces;
 - (BOOL)useCompactLabel;
 - (BOOL)hideActivityIndicator;
 - (BOOL)highlightTabLabels;
+- (BOOL)hideMenuBarInFullscreen;
 - (BOOL)openBookmark;
 - (NSString *)wordChars;
 - (ITermCursorType)legacyCursorType;
@@ -655,6 +673,7 @@ typedef enum {
 - (BOOL)showPaneTitles;
 - (BOOL)disableFullscreenTransparency;
 - (BOOL)smartPlacement;
+- (BOOL)adjustWindowForFontSizeChange;
 - (BOOL)windowNumber;
 - (BOOL)jobName;
 - (BOOL)showBookmarkName;
@@ -663,6 +682,7 @@ typedef enum {
 - (BOOL)openArrangementAtStartup;
 - (int)irMemory;
 - (BOOL)hotkey;
+- (short)hotkeyChar;  // Nonzero if hotkey is set validly
 - (int)hotkeyCode;
 - (int)hotkeyModifiers;
 - (NSTextField*)hotkeyField;
@@ -694,7 +714,6 @@ typedef enum {
 - (id)tableView:(NSTableView *)aTableView objectValueForTableColumn:(NSTableColumn *)aTableColumn row:(int)rowIndex;
 - (void)_updateFontsDisplay;
 - (void)updateBookmarkFields:(NSDictionary *)dict  ;
-- (void)_commonDisplaySelectFont:(id)sender;
 - (IBAction)displaySelectFont:(id)sender;
 - (void)changeFont:(id)fontManager;
 - (NSString*)_chooseBackgroundImage;
@@ -718,7 +737,6 @@ typedef enum {
 - (IBAction)closeWindow:(id)sender;
 - (IBAction)selectLogDir:(id)sender;
 - (void)controlTextDidChange:(NSNotification *)aNotification;
-- (void)textDidChange:(NSNotification *)aNotification;
 - (BOOL)onScreen;
 - (NSTextField*)shortcutKeyTextField;
 - (void)shortcutKeyDown:(NSEvent*)event;
@@ -754,6 +772,7 @@ typedef enum {
 - (IBAction)copyBookmarks:(id)sender;
 - (IBAction)cancelCopyBookmarks:(id)sender;
 - (void)copyAttributes:(BulkCopySettings)attributes fromBookmark:(NSString*)guid toBookmark:(NSString*)destGuid;
+- (void)sanityCheckHotKey;
 
 - (int)control;
 - (int)leftOption;
@@ -771,9 +790,6 @@ typedef enum {
 
 - (BOOL)importColorPresetFromFile:(NSString*)filename;
 
-@end
-
-@interface PreferencePanel (KeyValueCoding)
 - (BOOL)haveJobsForCurrentBookmark;
 - (void)setHaveJobsForCurrentBookmark:(BOOL)value;
 

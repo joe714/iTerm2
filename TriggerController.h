@@ -6,6 +6,7 @@
 //
 
 #import <Cocoa/Cocoa.h>
+#import "FutureMethods.h"
 
 @class TriggerController;
 
@@ -13,7 +14,7 @@
 - (void)triggerChanged:(TriggerController *)controller;
 @end
 
-@interface TriggerController : NSWindowController {
+@interface TriggerController : NSWindowController <NSWindowDelegate> {
   NSString *guid_;
   BOOL hasSelection_;
   IBOutlet NSObject<TriggerDelegate> *delegate_;  // weak

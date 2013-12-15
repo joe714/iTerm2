@@ -8,6 +8,7 @@
 
 #import "ContextMenuActionPrefsController.h"
 #import "NSStringITerm.h"
+#import "FutureMethods.h"
 
 static NSString* kTitleKey = @"title";
 static NSString* kActionKey = @"action";
@@ -51,13 +52,31 @@ static NSString* kParameterKey = @"parameter";
     return title;
 }
 
++ (NSString *)parameterValue:(NSString *)parameter
+            encodedForAction:(ContextMenuActions)action
+{
+    switch (action) {
+        case kRunCommandContextMenuAction:
+        case kRunCoprocessContextMenuAction:
+            return [parameter stringWithEscapedShellCharacters];
+        case kOpenFileContextMenuAction:
+            return parameter;
+        case kOpenUrlContextMenuAction:
+            return [parameter stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+    }
+
+    return nil;
+}
+
 + (NSString *)parameterForActionDict:(NSDictionary *)dict withCaptureComponents:(NSArray *)components
 {
     NSString *parameter = [dict objectForKey:kParameterKey];
+    ContextMenuActions action = (ContextMenuActions) [[dict objectForKey:kActionKey] intValue];
     for (int i = 0; i < 9; i++) {
         NSString *repl = @"";
         if (i < components.count) {
-            repl = [components objectAtIndex:i];
+            repl = [self parameterValue:[components objectAtIndex:i]
+                       encodedForAction:action];
         }
         parameter = [parameter stringByReplacingBackreference:i withString:repl];
     }
@@ -203,6 +222,13 @@ static NSString* kParameterKey = @"parameter";
 - (void)tableViewSelectionDidChange:(NSNotification *)aNotification
 {
     self.hasSelection = [tableView_ numberOfSelectedRows] > 0;
+}
+
+#pragma mark NSWindowDelegate
+
+- (void)windowWillClose:(NSNotification *)notification
+{
+    [tableView_ reloadData];
 }
 
 @end

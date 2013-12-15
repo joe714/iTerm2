@@ -36,7 +36,7 @@
 #import "FutureMethods.h"
 #import "PTYTextView.h"
 #import "PreferencePanel.h"
-#include "NSImage+CoreImage.h"
+#import "FutureMethods.h"
 #import <Cocoa/Cocoa.h>
 
 @interface PTYScrollView (Private)
@@ -47,12 +47,15 @@
 
 @implementation PTYScroller
 
-@synthesize hasDarkBackground;
+@synthesize hasDarkBackground = hasDarkBackground_;
 
 - (id)init
 {
-    userScroll=NO;
-    return [super init];
+    self = [super init];
+    if (self) {
+        userScroll = NO;
+    }
+    return self;
 }
 
 + (BOOL)isCompatibleWithOverlayScrollers
@@ -60,7 +63,15 @@
     return YES;
 }
 
-- (void) mouseDown: (NSEvent *)theEvent
+- (void)setHasDarkBackground:(BOOL)value {
+    const int defaultStyle = NSScrollerKnobStyleDefault;
+    const int lightStyle = NSScrollerKnobStyleLight;
+    [self setKnobStyle:value ? lightStyle : defaultStyle];
+
+    hasDarkBackground_ = value;
+}
+
+- (void)mouseDown: (NSEvent *)theEvent
 {
     [super mouseDown:theEvent];
 
@@ -110,38 +121,7 @@
 
 - (BOOL)isLegacyScroller
 {
-    return [(NSScroller*)self futureScrollerStyle] == FutureNSScrollerStyleLegacy;
-}
-
-- (void)drawRect:(NSRect)dirtyRect {
-    if (IsLionOrLater() &&
-        ![self isLegacyScroller] &&
-        self.hasDarkBackground &&
-        dirtyRect.size.width > 0 &&
-        dirtyRect.size.height > 0) {
-        NSImage *superDrawn = [[NSImage alloc] initWithSize:NSMakeSize(dirtyRect.origin.x + dirtyRect.size.width,
-                                                                       dirtyRect.origin.y + dirtyRect.size.height)];
-        [superDrawn lockFocus];
-        [super drawRect:dirtyRect];
-        [superDrawn unlockFocus];
-
-        NSImage *temp = [[NSImage alloc] initWithSize:[superDrawn size]];
-        [temp lockFocus];
-        [superDrawn drawAtPoint:dirtyRect.origin
-                       fromRect:dirtyRect
-                coreImageFilter:@"CIColorControls"
-                      arguments:[NSDictionary dictionaryWithObjectsAndKeys:[NSNumber numberWithDouble:0.5], @"inputBrightness", nil]];
-        [temp unlockFocus];
-
-        [temp drawAtPoint:dirtyRect.origin
-                 fromRect:dirtyRect
-                operation:NSCompositeCopy
-                 fraction:1.0];
-        [temp release];
-        [superDrawn release];
-    } else {
-        [super drawRect:dirtyRect];
-    }
+    return [(NSScroller*)self scrollerStyle] == NSScrollerStyleLegacy;
 }
 
 @end
@@ -169,14 +149,19 @@
     return self;
 }
 
-- (void) dealloc
+- (void)dealloc
 {
     [backgroundImage release];
+    [backgroundPattern release];
     [creationDate_ release];
     [timer_ invalidate];
     timer_ = nil;
 
     [super dealloc];
+}
+
+- (NSString *)description {
+    return [NSString stringWithFormat:@"%@ visibleRect:%@", [super description], [NSValue valueWithRect:[self documentVisibleRect]]];
 }
 
 - (void)drawBackgroundImageRect:(NSRect)rect useTransparency:(BOOL)useTransparency
@@ -191,10 +176,23 @@
 {
     NSRect srcRect;
 
-    // resize image if we need to
-    if ([backgroundImage size].width != [self documentVisibleRect].size.width ||
-        [backgroundImage size].height != [self documentVisibleRect].size.height) {
-        [backgroundImage setSize: [self documentVisibleRect].size];
+    float alpha = useTransparency ? (1.0 - [self transparency]) : 1;
+    // resize/create image if we need to
+    if ((!backgroundImage && backgroundPattern) ||
+        !NSEqualSizes(backgroundImage.size, self.documentVisibleRect.size)) {
+        if (backgroundPattern) {
+            [backgroundImage release];
+            backgroundImage = [[NSImage alloc] initWithSize:self.documentVisibleRect.size];
+            [backgroundImage lockFocus];
+            [[backgroundPattern colorWithAlphaComponent:alpha] set];
+            [backgroundPattern drawSwatchInRect:NSMakeRect(0,
+                                                           0,
+                                                           self.documentVisibleRect.size.width,
+                                                           self.documentVisibleRect.size.height)];
+            [backgroundImage unlockFocus];
+        } else {
+            [backgroundImage setSize:[self documentVisibleRect].size];
+        }
     }
 
     srcRect = rect;
@@ -204,10 +202,10 @@
     srcRect.origin.y = [backgroundImage size].height - srcRect.origin.y - srcRect.size.height - VMARGIN;
 
     // draw the image rect
-    [[self backgroundImage] compositeToPoint:dest
-                                    fromRect:srcRect
-                                   operation:NSCompositeCopy
-                                    fraction:useTransparency ? (1.0 - [self transparency]) : 1];
+    [backgroundImage compositeToPoint:dest
+                             fromRect:srcRect
+                            operation:NSCompositeCopy
+                             fraction:alpha];
 }
 
 - (void)scrollWheel:(NSEvent *)theEvent
@@ -231,29 +229,40 @@
     NSRect scrollRect;
     PTYScroller *verticalScroller = (PTYScroller *)[self verticalScroller];
 
-    scrollRect= [self documentVisibleRect];
-    if(scrollRect.origin.y+scrollRect.size.height < [[self documentView] frame].size.height)
-        [verticalScroller setUserScroll: YES];
+    scrollRect = [self documentVisibleRect];
+    if (scrollRect.origin.y + scrollRect.size.height < [[self documentView] frame].size.height)
+        [verticalScroller setUserScroll:YES];
     else
-        [verticalScroller setUserScroll: NO];
+        [verticalScroller setUserScroll:NO];
 }
 
-// background image
-- (NSImage *) backgroundImage
+- (BOOL)hasBackgroundImage {
+    return backgroundImage != nil || backgroundPattern != nil;
+}
+
+- (void)setBackgroundImage:(NSImage *)anImage
 {
-    return (backgroundImage);
+    [self setBackgroundImage:anImage asPattern:NO];
 }
 
-- (void) setBackgroundImage: (NSImage *) anImage
+- (void)setBackgroundImage:(NSImage *)anImage asPattern:(BOOL)asPattern
 {
-    [backgroundImage release];
-    [anImage retain];
-    backgroundImage = anImage;
-    [backgroundImage setScalesWhenResized: YES];
-    [backgroundImage setSize: [self documentVisibleRect].size];
+    [backgroundPattern release];
+    backgroundPattern = nil;
+    [backgroundImage autorelease];
+    backgroundImage = nil;
+    if (asPattern) {
+        if (anImage) {
+            backgroundPattern = [[NSColor colorWithPatternImage:anImage] retain];
+        }
+    } else {
+        backgroundImage = [anImage retain];
+        [backgroundImage setScalesWhenResized:YES];
+        [backgroundImage setSize:[self documentVisibleRect].size];
+    }
 }
 
-- (float) transparency
+- (float)transparency
 {
     return (transparency);
 }
@@ -274,13 +283,14 @@
 
 - (BOOL)isLegacyScroller
 {
-    return [(NSScrollView*)self futureScrollerStyle] == FutureNSScrollerStyleLegacy;
+    return [(NSScrollView*)self scrollerStyle] == NSScrollerStyleLegacy;
 }
 
 - (void)setHasVerticalScroller:(BOOL)flag
 {
     [self setHasVerticalScroller:flag inInit:NO];
 }
+
 @end
 
 

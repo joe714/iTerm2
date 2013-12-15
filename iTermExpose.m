@@ -26,10 +26,12 @@
  */
 
 #import "iTermExpose.h"
-#import "iTermController.h"
-#import "PseudoTerminal.h"
-#import "PTYTab.h"
+#import "FutureMethods.h"
 #import "GlobalSearch.h"
+#import "HotkeyWindowController.h"
+#import "PTYTab.h"
+#import "PseudoTerminal.h"
+#import "iTermController.h"
 
 static const float THUMB_MARGIN = 25;
 /*
@@ -171,6 +173,8 @@ static NSString* FormatRect(NSRect r) {
                   size:(NSSize)size
            screenFrame:(NSRect)screenFrame
                 frames:(NSRect*)frames;
+
+- (void)tabChangedSinceLastExpose;
 
 @end
 
@@ -395,7 +399,7 @@ static BOOL RectsApproxEqual(NSRect a, NSRect b)
         iTermController* controller = [iTermController sharedInstance];
         PseudoTerminal* terminal = [[controller terminals] objectAtIndex:windowIndex_];
         if ([terminal isHotKeyWindow]) {
-            [[iTermController sharedInstance] showHotKeyWindow];
+            [[HotkeyWindowController sharedInstance] showHotKeyWindow];
         } else {
             [controller setCurrentTerminal:terminal];
             [[terminal window] makeKeyAndOrderFront:self];
@@ -793,8 +797,7 @@ static NSScreen *ExposeScreen() {
         NSGradient* aGradient = [[[NSGradient alloc]
                                   initWithStartingColor:[[NSColor blackColor] colorWithAlphaComponent:0.1]
                                   endingColor:[[NSColor blackColor] colorWithAlphaComponent:0.7]] autorelease];
-        [aGradient drawInRect:[self frame]
-       relativeCenterPosition:NSMakePoint(0, 0)];
+        [aGradient drawInRect:[self frame] relativeCenterPosition:NSMakePoint(0, 0)];
         [cache_ unlockFocus];
     }
 
@@ -1256,6 +1259,7 @@ static NSScreen *ExposeScreen() {
     window_ = nil;
     [view_ release];
     view_ = nil;
+    SetSystemUIMode(kUIModeNormal, 0);
 }
 
 - (void)showWindows:(BOOL)fade
@@ -1353,6 +1357,9 @@ static int CompareFrames(const void* aPtr, const void* bPtr)
 
 - (void)recomputeIndices:(NSNotification*)notification
 {
+    if (![self isVisible]) {
+        return;
+    }
     if (![[view_ grid] recomputeIndices]) {
         [self _toggleOff];
     }
@@ -1460,10 +1467,12 @@ static BOOL AdvanceCell(float* x, float* y, NSRect screenFrame, NSSize size) {
     for (i = 0; i < n; ) {
         int j;
         for (j = i; j < n; j++) {
+            // The analyzer warning here is bogus (all frames from 0 to n-1 are initialized above).
             if (frames[j].origin.y != frames[i].origin.y) {
                 break;
             }
         }
+        // The analyzer warning here is bogus (all frames from 0 to n-1 are initialized above).
         const float horizontalSpan = frames[j-1].origin.x + frames[j-1].size.width - frames[i].origin.x;
         const float horizontalShift = (screenFrame.size.width - horizontalSpan) / 2;
         for (int k = i; k < j; k++) {
@@ -1532,7 +1541,8 @@ static BOOL AdvanceCell(float* x, float* y, NSRect screenFrame, NSSize size) {
     // Count up wasted space
     float availableSpace = screenFrame.size.width * screenFrame.size.height - searchFrame.size.width * searchFrame.size.height;
     for (i = 0; i < n; i++) {
-        const NSSize origSize = [[images objectAtIndex:i] size];
+        NSImage *image = [images objectAtIndex:i];
+        const NSSize origSize = [image size];
         NSSize scaledSize = [self scaledImageSize:origSize
                                         thumbSize:frames[i].size];
         availableSpace -= scaledSize.width * scaledSize.height;
@@ -1544,8 +1554,8 @@ static BOOL AdvanceCell(float* x, float* y, NSRect screenFrame, NSSize size) {
 - (void)_toggleOn
 {
     iTermController* controller = [iTermController sharedInstance];
-    if ([controller isHotKeyWindowOpen]) {
-        [controller fastHideHotKeyWindow];
+    if ([[HotkeyWindowController sharedInstance] isHotKeyWindowOpen]) {
+        [[HotkeyWindowController sharedInstance] fastHideHotKeyWindow];
     }
 
     // Crete parallel arrays with info needed to create subviews.
@@ -1564,8 +1574,8 @@ static BOOL AdvanceCell(float* x, float* y, NSRect screenFrame, NSSize size) {
 
     // Figure out the right size for a thumbnail.
     NSScreen* theScreen = ExposeScreen();
-    NSRect screenFrame = [theScreen visibleFrame];
-    screenFrame.origin = NSZeroPoint;
+    SetSystemUIMode(kUIModeAllHidden, 0);
+    NSRect screenFrame = [theScreen frame];
     // Create the window and its view.
     window_ = [[iTermExposeWindow alloc] initWithContentRect:screenFrame
                                                    styleMask:NSBorderlessWindowMask
@@ -1598,7 +1608,7 @@ static BOOL AdvanceCell(float* x, float* y, NSRect screenFrame, NSSize size) {
     [window_ setBackgroundColor:[[NSColor blackColor] colorWithAlphaComponent:0]];
     [window_ setOpaque:NO];
 
-    PseudoTerminal* hotKeyWindow = [controller hotKeyWindow];
+    PseudoTerminal* hotKeyWindow = [[HotkeyWindowController sharedInstance] hotKeyWindow];
     BOOL isHot = NO;
     if (hotKeyWindow) {
         isHot = [hotKeyWindow isHotKeyWindow];
@@ -1659,6 +1669,7 @@ static BOOL AdvanceCell(float* x, float* y, NSRect screenFrame, NSSize size) {
 
 - (void)_toggleOff
 {
+    SetSystemUIMode(kUIModeNormal, 0);
     [[view_ grid] onSelection:nil session:nil];
 }
 

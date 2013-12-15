@@ -7,7 +7,7 @@
 //
 
 #import "ToolNotes.h"
-#import "NSFileManager+DirectoryLocations.h"
+#import "NSFileManager+iTerm.h"
 
 static NSString *kToolNotesSetTextNotification = @"kToolNotesSetTextNotification";
 
@@ -22,8 +22,8 @@ static NSString *kToolNotesSetTextNotification = @"kToolNotesSetTextNotification
     if (self) {
         filemanager_ = [[NSFileManager alloc] init];
 
-        NSScrollView *scrollview = [[NSScrollView alloc]
-                                    initWithFrame:NSMakeRect(0, 0, frame.size.width, frame.size.height)];
+        NSScrollView *scrollview = [[[NSScrollView alloc]
+                                     initWithFrame:NSMakeRect(0, 0, frame.size.width, frame.size.height)] autorelease];
         [scrollview setHasVerticalScroller:YES];
         [scrollview setHasHorizontalScroller:NO];
         [scrollview setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];

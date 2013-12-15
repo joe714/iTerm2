@@ -9,25 +9,28 @@
 #import "EventMonitorView.h"
 #import "PointerPrefsController.h"
 #import "FutureMethods.h"
+#import "iTermApplicationDelegate.h"
 
 @implementation EventMonitorView
 
 - (void)awakeFromNib
 {
-    [self futureSetAcceptsTouchEvents:YES];
-    [self futureSetWantsRestingTouches:YES];
+    [self setAcceptsTouchEvents:YES];
+    [self setWantsRestingTouches:YES];
 }
 
 - (void)touchesBeganWithEvent:(NSEvent *)ev
 {
-    numTouches_ = [[ev futureTouchesMatchingPhase:1 | (1 << 2)/*NSTouchPhasesBegan | NSTouchPhasesStationary*/
-                                           inView:self] count];
+    numTouches_ = [[ev touchesMatchingPhase:(NSTouchPhaseBegan | NSTouchPhaseStationary)
+                                     inView:self] count];
+    DLog(@"EventMonitorView touchesBeganWithEvent:%@; numTouches=%d", ev, numTouches_);
 }
 
 - (void)touchesEndedWithEvent:(NSEvent *)ev
 {
-    numTouches_ = [[ev futureTouchesMatchingPhase:(1 << 2)/*NSTouchPhasesStationary*/
-                                           inView:self] count];
+    numTouches_ = [[ev touchesMatchingPhase:NSTouchPhaseStationary
+                                     inView:self] count];
+    DLog(@"EventMonitorView touchesEndedWithEvent:%@; numTouches=%d", ev, numTouches_);
 }
 
 - (void)showNotSupported
@@ -38,6 +41,7 @@
 
 - (void)mouseUp:(NSEvent *)theEvent
 {
+    DLog(@"EventMonitorView mouseUp:%@", theEvent);
     if (numTouches_ == 3) {
         [pointerPrefs_ setGesture:kThreeFingerClickGesture
                         modifiers:[theEvent modifierFlags]];
@@ -48,6 +52,7 @@
 
 - (void)rightMouseUp:(NSEvent *)theEvent
 {
+    DLog(@"EventMonitorView rightMouseUp:%@", theEvent);
     int buttonNumber = 1;
     int clickCount = [theEvent clickCount];
     int modMask = [theEvent modifierFlags];
@@ -57,6 +62,7 @@
 
 - (void)otherMouseDown:(NSEvent *)theEvent
 {
+    DLog(@"EventMonitorView otherMouseDown:%@", theEvent);
     int buttonNumber = [theEvent buttonNumber];
     int clickCount = [theEvent clickCount];
     int modMask = [theEvent modifierFlags];

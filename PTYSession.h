@@ -24,33 +24,37 @@
  **  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-#import <Foundation/Foundation.h>
-#import <AppKit/AppKit.h>
-#import "ProfileModel.h"
 #import "DVR.h"
-#import "WindowControllerInterface.h"
-#import "TextViewWrapper.h"
 #import "FindViewController.h"
 #import "ITAddressBookMgr.h"
 #import "LineBuffer.h"
-#import "TmuxGateway.h"
+#import "PTYTextView.h"
+#import "PasteViewController.h"
+#import "ProfileModel.h"
+#import "TextViewWrapper.h"
 #import "TmuxController.h"
-
+#import "TmuxGateway.h"
+#import "VT100Screen.h"
+#import "VT100ScreenMark.h"
+#import "WindowControllerInterface.h"
+#import <AppKit/AppKit.h>
+#import <Foundation/Foundation.h>
 #include <sys/time.h>
 
 #define NSLeftAlternateKeyMask  (0x000020 | NSAlternateKeyMask)
 #define NSRightAlternateKeyMask (0x000040 | NSAlternateKeyMask)
 
+@class FakeWindow;
+@class PTYScrollView;
 @class PTYTask;
 @class PTYTextView;
-@class PTYScrollView;
+@class PasteContext;
+@class PreferencePanel;
+@class PseudoTerminal;
 @class VT100Screen;
 @class VT100Terminal;
-@class PreferencePanel;
 @class iTermController;
 @class iTermGrowlDelegate;
-@class FakeWindow;
-@class PseudoTerminal;
 
 // Timer period when all we have to do is update blinking text/cursor.
 static const float kBlinkTimerIntervalSec = 1.0 / 2.0;
@@ -71,7 +75,12 @@ typedef enum {
 
 @class PTYTab;
 @class SessionView;
-@interface PTYSession : NSResponder <FindViewControllerDelegate, TmuxGatewayDelegate>
+@interface PTYSession : NSResponder <
+    FindViewControllerDelegate,
+    PasteViewControllerDelegate,
+    PTYTextViewDelegate,
+    TmuxGatewayDelegate,
+    VT100ScreenDelegate>
 {
     // Owning tab.
     PTYTab* tab_;
@@ -88,6 +97,12 @@ typedef enum {
     // The window title that should be used when this session is current. Otherwise defaultName
     // should be used.
     NSString* windowTitle;
+    
+    // The window title stack
+    NSMutableArray* windowTitleStack;
+    
+    // The icon title stack
+    NSMutableArray* iconTitleStack;
 
     // The original bookmark name.
     NSString* bookmarkName;
@@ -144,6 +159,9 @@ typedef enum {
 
     // This is not used as far as I can tell.
     int bell;
+
+    // True if background image should be tiled
+    BOOL backgroundImageTiled;
 
     // Filename of background image.
     NSString* backgroundImagePath;
@@ -206,10 +224,6 @@ typedef enum {
     // Last time this session became active
     NSDate* lastActiveAt_;
 
-    // saved scroll position or -1
-    long long savedScrollPosition_;
-    int savedScrollHeight_;
-
     // Time session was created
     NSDate* creationDate_;
 
@@ -231,7 +245,7 @@ typedef enum {
     // Does the terminal think this session is focused?
     BOOL focused_;
 
-    FindContext tailFindContext_;
+    FindContext *tailFindContext_;
     NSTimer *tailFindTimer_;
 
     enum {
@@ -243,6 +257,15 @@ typedef enum {
     TmuxController *tmuxController_;
     int tmuxPane_;
     BOOL tmuxLogging_;  // log to gateway client
+    BOOL tmuxSecureLogging_;
+
+    NSArray *sendModifiers_;
+    NSMutableArray *eventQueue_;
+    PasteViewController *pasteViewController_;
+    PasteContext *pasteContext_;
+
+    NSInteger requestAttentionId_;  // Last request-attention identifier
+    VT100ScreenMark *lastMark_;
 }
 
 // Return the current pasteboard value as a string.
@@ -308,8 +331,7 @@ typedef enum {
 - (void)startProgram:(NSString *)program
            arguments:(NSArray *)prog_argv
          environment:(NSDictionary *)prog_env
-              isUTF8:(BOOL)isUTF8
-      asLoginSession:(BOOL)asLoginSession;
+              isUTF8:(BOOL)isUTF8;
 
 - (void)softTerminate;
 - (void)terminate;
@@ -328,11 +350,8 @@ typedef enum {
 
 // PTYTextView
 - (BOOL)hasTextSendingKeyMappingForEvent:(NSEvent*)event;
-- (BOOL)hasActionableKeyMappingForEvent: (NSEvent *)event;
-- (void)keyDown:(NSEvent *)event;
 - (BOOL)willHandleEvent: (NSEvent *)theEvent;
 - (void)handleEvent: (NSEvent *)theEvent;
-- (void)insertText:(NSString *)string;
 - (void)insertNewline:(id)sender;
 - (void)insertTab:(id)sender;
 - (void)moveUp:(id)sender;
@@ -342,7 +361,7 @@ typedef enum {
 - (void)pageUp:(id)sender;
 - (void)pageDown:(id)sender;
 - (void)paste:(id)sender;
-- (void)pasteString: (NSString *)aString;
+- (void)pasteString:(NSString *)str flags:(int)flags;
 - (void)pasteSlowly:(id)sender;
 - (void)deleteBackward:(id)sender;
 - (void)deleteForward:(id)sender;
@@ -352,7 +371,7 @@ typedef enum {
 // Returns the frame size for a scrollview that perfectly contains the contents
 // of this session based on rows/cols, and taking into acount the presence of
 // a scrollbar.
-- (NSSize)idealScrollViewSize;
+- (NSSize)idealScrollViewSizeWithStyle:(NSScrollerStyle)scrollerStyle;
 
 // misc
 - (void)setWidth:(int)width height:(int)height;
@@ -372,10 +391,6 @@ typedef enum {
 // Array of subprocessess names.
 - (NSArray *)childJobNames;
 
-// Contextual menu
-- (void)menuForEvent:(NSEvent *)theEvent menu: (NSMenu *)theMenu;
-
-
 // get/set methods
 - (PTYTab*)tab;
 - (PTYTab*)ptytab;
@@ -386,6 +401,7 @@ typedef enum {
 - (void)setGrowlNewOutput:(BOOL)value;
 - (BOOL)growlNewOutput;
 
+- (NSString *)windowName;
 - (NSString *)name;
 - (NSString*)rawName;
 - (void)setBookmarkName:(NSString*)theName;
@@ -398,22 +414,23 @@ typedef enum {
 - (NSString*)formattedName:(NSString*)base;
 - (NSString *)windowTitle;
 - (void)setWindowTitle: (NSString *)theTitle;
+- (void)pushWindowTitle;
+- (void)popWindowTitle;
+- (void)pushIconTitle;
+- (void)popIconTitle;
 - (PTYTask *)SHELL;
 - (void)setSHELL: (PTYTask *)theSHELL;
 - (VT100Terminal *)TERMINAL;
-- (void)setTERMINAL: (VT100Terminal *)theTERMINAL;
 - (NSString *)TERM_VALUE;
 - (void)setTERM_VALUE: (NSString *)theTERM_VALUE;
 - (NSString *)COLORFGBG_VALUE;
 - (void)setCOLORFGBG_VALUE: (NSString *)theCOLORFGBG_VALUE;
 - (VT100Screen *)SCREEN;
 - (void)setSCREEN: (VT100Screen *)theSCREEN;
-- (NSImage *)image;
 - (SessionView *)view;
 - (void)setView:(SessionView*)newView;
 - (PTYTextView *)TEXTVIEW;
 - (void)setTEXTVIEW: (PTYTextView *)theTEXTVIEW;
-- (PTYScrollView *)SCROLLVIEW;
 - (void)setSCROLLVIEW: (PTYScrollView *)theSCROLLVIEW;
 - (NSStringEncoding)encoding;
 - (void)setEncoding:(NSStringEncoding)encoding;
@@ -425,9 +442,9 @@ typedef enum {
 - (void)setAutoClose:(BOOL)set;
 - (BOOL)doubleWidth;
 - (void)setDoubleWidth:(BOOL)set;
-- (BOOL)xtermMouseReporting;
 - (void)setXtermMouseReporting:(BOOL)set;
 - (NSDictionary *)addressBookEntry;
+- (void)setSendModifiers:(NSArray *)sendModifiers;
 
 // Return the address book that the session was originally created with.
 - (Profile *)originalAddressBookEntry;
@@ -442,6 +459,8 @@ typedef enum {
 - (BOOL)logging;
 - (void)logStart;
 - (void)logStop;
+- (BOOL)backgroundImageTiled;
+- (void)setBackgroundImageTiled:(BOOL)set;
 - (NSString *)backgroundImagePath;
 - (void)setBackgroundImagePath: (NSString *)imageFilePath;
 - (NSColor *)foregroundColor;
@@ -466,9 +485,9 @@ typedef enum {
 - (void)setBlend:(float)blend;
 - (BOOL)useBoldFont;
 - (void)setUseBoldFont:(BOOL)boldFlag;
+- (BOOL)useItalicFont;
+- (void)setUseItalicFont:(BOOL)boldFlag;
 - (void)setColorTable:(int)index color:(NSColor *)c;
-- (int)optionKey;
-- (int)rightOptionKey;
 - (BOOL)shouldSendEscPrefixForModifier:(unsigned int)modmask;
 
 // Session status
@@ -513,9 +532,6 @@ typedef enum {
 - (void)setLastActiveAt:(NSDate*)date;
 - (NSDate*)lastActiveAt;
 
-// Save the current scroll position
-- (void)saveScrollPosition;
-
 // Jump to the saved scroll position
 - (void)jumpToSavedScrollPosition;
 
@@ -544,15 +560,10 @@ typedef enum {
 - (void)setPasteboard:(NSString *)pbName;
 - (BOOL)hasCoprocess;
 - (void)stopCoprocess;
-- (void)launchCoprocessWithCommand:(NSString *)command;
 - (void)launchSilentCoprocessWithCommand:(NSString *)command;
 
 - (void)setFocused:(BOOL)focused;
 - (BOOL)wantsContentChangedNotification;
-
-- (void)sendEscapeSequence:(NSString *)text;
-- (void)sendHexCode:(NSString *)codes;
-- (void)sendText:(NSString *)text;
 
 - (void)startTmuxMode;
 - (void)tmuxDetach;
@@ -565,6 +576,12 @@ typedef enum {
 
 - (TmuxController *)tmuxController;
 
+- (void)toggleShowTimestamps;
+- (void)addNoteAtCursor;
+- (void)showHideNotes;
+- (void)previousMarkOrNote;
+- (void)nextMarkOrNote;
+
 @end
 
 @interface PTYSession (ScriptingSupport)
@@ -575,20 +592,7 @@ typedef enum {
 -(void)handleTerminateScriptCommand: (NSScriptCommand *)command;
 -(void)handleSelectScriptCommand: (NSScriptCommand *)command;
 -(void)handleWriteScriptCommand: (NSScriptCommand *)command;
+-(void)handleClearScriptCommand: (NSScriptCommand *)command;
 
 @end
 
-@interface PTYSession (Private)
-
-- (NSString*)_getLocale;
-- (NSString*)_lang;
-- (NSString*)encodingName;
-- (void)setDvrFrame;
-- (void)stopTailFind;
-- (void)beginTailFind;
-- (void)continueTailFind;
-- (void)printTmuxMessage:(NSString *)message;
-- (void)printTmuxCommandOutputToScreen:(NSString *)response;
-- (BOOL)_localeIsSupported:(NSString*)theLocale;
-
-@end

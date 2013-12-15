@@ -33,6 +33,8 @@
 #import "Trouter.h"
 #import "LineBuffer.h"
 #import "PointerController.h"
+#import "PTYFontInfo.h"
+#import "CharacterRun.h"
 
 #include <sys/time.h>
 #define PRETTY_BOLD
@@ -41,7 +43,39 @@
 #define VMARGIN 2
 #define COLOR_KEY_SIZE 4
 
+@class MovingAverage;
+@class PTYScrollView;
+@class PTYSession;  // TODO: Remove this after PTYTextView doesn't depend directly on PTYSession
+@class PTYTask;
+@class SearchResult;
+@class ThreeFingerTapGestureRecognizer;
 @class VT100Screen;
+@class VT100Terminal;
+@protocol TrouterDelegate;
+
+@protocol PTYTextViewDelegate <NSObject>
+
+- (BOOL)xtermMouseReporting;
+- (BOOL)isPasting;
+- (void)queueKeyDown:(NSEvent *)event;
+- (void)keyDown:(NSEvent *)event;
+- (BOOL)hasActionableKeyMappingForEvent:(NSEvent *)event;
+- (int)optionKey;
+- (int)rightOptionKey;
+// Contextual menu
+- (void)menuForEvent:(NSEvent *)theEvent menu:(NSMenu *)theMenu;
+- (void)pasteString:(NSString *)aString;
+- (void)paste:(id)sender;
+- (void)textViewFontDidChange;
+- (PTYScrollView *)SCROLLVIEW;
+- (void)sendEscapeSequence:(NSString *)text;
+- (void)sendHexCode:(NSString *)codes;
+- (void)sendText:(NSString *)text;
+- (void)launchCoprocessWithCommand:(NSString *)command;
+- (void)insertText:(NSString *)string;
+- (PTYTask *)SHELL;
+
+@end
 
 // Amount of time to highlight the cursor after beginFindCursor:YES
 static const double kFindCursorHoldTime = 1;
@@ -54,17 +88,6 @@ enum {
     SELECT_WHOLE_LINE
 };
 
-// A collection of data about a font.
-struct PTYFontInfo {
-    NSFont* font;  // Toll-free bridged to CTFontRef
-
-    // Metrics
-    double baselineOffset;
-
-    struct PTYFontInfo* boldVersion;  // may be NULL
-};
-typedef struct PTYFontInfo PTYFontInfo;
-
 @interface FindCursorView : NSView {
     NSPoint cursor;
 }
@@ -73,7 +96,9 @@ typedef struct PTYFontInfo PTYFontInfo;
 
 @end
 
-@interface PTYTextView : NSView <NSTextInput, PointerControllerDelegate>
+@class CRunStorage;
+
+@interface PTYTextView : NSView <NSTextInput, PointerControllerDelegate, TrouterDelegate>
 {
     // This is a flag to let us know whether we are handling this
     // particular drag and drop operation. We are using it because
@@ -94,10 +119,13 @@ typedef struct PTYFontInfo PTYFontInfo;
 
     // option to not render in bold
     BOOL useBoldFont;
-    
+
     // Option to draw bold text as brighter colors.
     BOOL useBrightBold;
-    
+
+    // option to not render in italic
+    BOOL useItalicFont;
+
     // NSTextInput support
     BOOL IM_INPUT_INSERT;
     NSRange IM_INPUT_SELRANGE;
@@ -116,8 +144,8 @@ typedef struct PTYFontInfo PTYFontInfo;
     double horizontalSpacing_;
     double  verticalSpacing_;
 
-    PTYFontInfo primaryFont;
-    PTYFontInfo secondaryFont;
+    PTYFontInfo *primaryFont;
+    PTYFontInfo *secondaryFont;
 
     NSColor* colorTable[256];
     NSColor* defaultFGColor;
@@ -125,26 +153,33 @@ typedef struct PTYFontInfo PTYFontInfo;
     NSColor* defaultBoldColor;
     NSColor* defaultCursorColor;
     NSColor* selectionColor;
+    NSColor* unfocusedSelectionColor;
     NSColor* selectedTextColor;
     NSColor* cursorTextColor;
 
     // transparency
     double transparency;
-	double blend;
+    double blend;
 
     // data source
-    VT100Screen *dataSource;
-    id _delegate;
+    id<PTYTextViewDataSource> dataSource;
+    id<PTYTextViewDelegate> _delegate;
 
-    //selection
+    // selection goes from startX,startY to endX,endY. The end may be before or after the start.
+    // While the selection is being made (the mouse was clicked and is being dragged) the end
+    // position moves with the cursor.
     int startX, startY, endX, endY;
     int oldStartX, oldStartY, oldEndX, oldEndY;
+
+    // Underlined selection range (inclusive of all values), indicating clickable url.
+    int _underlineStartX, _underlineStartY, _underlineEndX, _underlineEndY;
     char oldSelectMode;
     BOOL mouseDown;
     BOOL mouseDragged;
     char selectMode;
     BOOL mouseDownOnSelection;
     NSEvent *mouseDownEvent;
+    int lastReportedX_, lastReportedY_;
 
     //find support
     int lastFindStartX, lastFindEndX;
@@ -173,7 +208,18 @@ typedef struct PTYFontInfo PTYFontInfo;
     // Previous tracking rect to avoid expensive calls to addTrackingRect.
     NSRect _trackingRect;
 
-    NSMutableDictionary* fallbackFonts;
+    // Maps a NSNumber int consisting of color index, alternate fg semantics
+    // flag, bold flag, and background flag to NSColor*s.
+    NSMutableDictionary* dimmedColorCache_;
+
+    // Dimmed background color with alpha.
+    NSColor *cachedBackgroundColor_;
+    double cachedBackgroundColorAlpha_;  // cached alpha value (comparable to another double)
+
+    // Previuos contrasting color returned
+    NSColor *memoizedContrastingColor_;
+    double memoizedMainRGB_[4];  // rgba for "main" color memoized.
+    double memoizedOtherRGB_[3];  // rgb for "other" color memoized.
 
     // Indicates if a selection that scrolls the window is in progress.
     // Negative value: scroll up.
@@ -245,9 +291,8 @@ typedef struct PTYFontInfo PTYFontInfo;
     // Alpha value of flashing bell graphic.
     double flashing_;
 
-    enum {
-        FlashBell, FlashWrapToTop, FlashWrapToBottom
-    } flashImage_;
+    // Image currently flashing.
+    FlashImage flashImage_;
 
     ITermCursorType cursorType_;
 
@@ -269,9 +314,9 @@ typedef struct PTYFontInfo PTYFontInfo;
 
     // For accessibility. This is a giant string with the entire scrollback buffer plus screen concatenated with newlines for hard eol's.
     NSMutableString* allText_;
-    // For accessibility. This is the indices at which newlines occur in allText_, ignoring multi-char compositing characters.
+    // For accessibility. This is the indices at which soft newlines occur in allText_, ignoring multi-char compositing characters.
     NSMutableArray* lineBreakIndexOffsets_;
-    // For accessibility. This is the actual indices at which newlines occcur in allText_.
+    // For accessibility. This is the actual indices at which soft newlines occcur in allText_.
     NSMutableArray* lineBreakCharOffsets_;
 
     // Brightness of background color
@@ -309,10 +354,38 @@ typedef struct PTYFontInfo PTYFontInfo;
     BOOL useBackgroundIndicator_;
 
     // Find context just after initialization.
-    FindContext initialFindContext_;
+    FindContext *initialFindContext_;
 
     PointerController *pointer_;
 	NSCursor *cursor_;
+
+    // True while the context menu is being opened.
+    BOOL openingContextMenu_;
+
+	// Experimental feature gated by ThreeFingerTapEmulatesThreeFingerClick bool pref.
+    ThreeFingerTapGestureRecognizer *threeFingerTapGestureRecognizer_;
+
+    // Position of cursor last time we looked. Since the cursor might move around a lot between
+    // calls to -updateDirtyRects without making any changes, we only redraw the old and new cursor
+    // positions.
+    int prevCursorX, prevCursorY;
+
+    MovingAverage *drawRectDuration_, *drawRectInterval_;
+	// Current font. Only valid for the duration of a single drawing context.
+    NSFont *selectedFont_;
+
+    // Used by _drawCursorTo: to remember the last time the cursor moved to avoid drawing a blinked-out
+    // cursor while it's moving.
+    NSTimeInterval lastTimeCursorMoved_;
+
+    // If set, the last-modified time of each line on the screen is shown on the right side of the display.
+    BOOL showTimestamps_;
+    float _antiAliasedShift;  // Amount to shift anti-aliased text by horizontally to simulate bold
+    NSImage *markImage_;
+
+    // Point clicked, valid only during -validateMenuItem and calls made from
+    // the context menu and if x and y are nonnegative.
+    VT100GridCoord validationClickPoint_;
 }
 
 + (NSCursor *)textViewCursor;
@@ -336,6 +409,7 @@ typedef struct PTYFontInfo PTYFontInfo;
 - (void)mouseDown:(NSEvent *)event;
 - (BOOL)mouseDownImpl:(NSEvent*)event;
 - (void)mouseUp:(NSEvent *)event;
+- (void)mouseMoved:(NSEvent *)event;
 - (void)mouseDragged:(NSEvent *)event;
 - (void)otherMouseDown: (NSEvent *) event;
 - (void)otherMouseUp:(NSEvent *)event;
@@ -351,6 +425,15 @@ typedef struct PTYFontInfo PTYFontInfo;
 - (void)openTargetInBackgroundWithEvent:(NSEvent *)event;
 - (void)smartSelectWithEvent:(NSEvent *)event;
 - (void)smartSelectIgnoringNewlinesWithEvent:(NSEvent *)event;
+- (BOOL)smartSelectAtX:(int)x
+                     y:(int)y
+              toStartX:(int*)X1
+              toStartY:(int*)Y1
+                toEndX:(int*)X2
+                toEndY:(int*)Y2
+      ignoringNewlines:(BOOL)ignoringNewlines;
+- (VT100GridCoordRange)rangeByTrimmingNullsFromRange:(VT100GridCoordRange)range
+                                          trimSpaces:(BOOL)trimSpaces;
 - (void)openContextMenuWithEvent:(NSEvent *)event;
 - (void)nextTabWithEvent:(NSEvent *)event;
 - (void)previousTabWithEvent:(NSEvent *)event;
@@ -365,26 +448,30 @@ typedef struct PTYFontInfo PTYFontInfo;
 - (void)selectPaneAboveWithEvent:(NSEvent *)event;
 - (void)selectPaneBelowWithEvent:(NSEvent *)event;
 - (void)newWindowWithProfile:(NSString *)guid withEvent:(NSEvent *)event;
-- (void)newWindowWithProfile:(NSString *)guid withEvent:(NSEvent *)event;
 - (void)newTabWithProfile:(NSString *)guid withEvent:(NSEvent *)event;
 - (void)newVerticalSplitWithProfile:(NSString *)guid withEvent:(NSEvent *)event;
 - (void)newHorizontalSplitWithProfile:(NSString *)guid withEvent:(NSEvent *)event;
 - (void)selectNextPaneWithEvent:(NSEvent *)event;
 - (void)selectPreviousPaneWithEvent:(NSEvent *)event;
+- (void)placeCursorOnCurrentLineWithEvent:(NSEvent *)event;
 
 
-- (NSString *)contentFromX:(int)startx Y:(int)starty ToX:(int)endx Y:(int)endy pad: (BOOL) pad;
 - (NSString *)contentFromX:(int)startx
                          Y:(int)starty
                        ToX:(int)nonInclusiveEndx
                          Y:(int)endy
                        pad:(BOOL)pad
-        includeLastNewline:(BOOL)includeLastNewline;
+        includeLastNewline:(BOOL)includeLastNewline
+    trimTrailingWhitespace:(BOOL)trimSelectionTrailingSpaces;
+
 - (NSString*)contentInBoxFromX:(int)startx Y:(int)starty ToX:(int)nonInclusiveEndx Y:(int)endy pad: (BOOL) pad;
 - (NSString *)selectedText;
 - (NSString *)selectedTextWithPad: (BOOL) pad;
 - (NSString *)content;
+// Copy with or without styles, as set by user defaults. Not for use when a copy item in the menu is invoked.
+- (void)copySelectionAccordingToUserPreferences;
 - (void)copy:(id)sender;
+- (IBAction)copyWithStyles:(id)sender;
 - (void)paste:(id)sender;
 - (void)pasteSelection:(id)sender;
 - (BOOL)validateMenuItem:(NSMenuItem *)item;
@@ -412,6 +499,8 @@ typedef struct PTYFontInfo PTYFontInfo;
 - (BOOL)useBoldFont;
 - (void)setUseBoldFont:(BOOL)boldFlag;
 - (void)setUseBrightBold:(BOOL)flag;
+- (BOOL)useItalicFont;
+- (void)setUseItalicFont:(BOOL)italicFlag;
 - (BOOL)blinkingCursor;
 - (void)setBlinkingCursor:(BOOL)bFlag;
 - (void)setBlinkAllowed:(BOOL)value;
@@ -422,7 +511,8 @@ typedef struct PTYFontInfo PTYFontInfo;
 - (NSColor*)defaultFGColor;
 - (NSColor*)defaultBGColor;
 - (NSColor*)defaultBoldColor;
-- (NSColor*)colorForCode:(int)theIndex alternateSemantics:(BOOL)alt bold:(BOOL)isBold isBackground:(BOOL)isBackground;
+- (NSColor*)colorForCode:(int)theIndex green:(int)green blue:(int)blue colorMode:(ColorMode)theMode bold:(BOOL)isBold isBackground:(BOOL)isBackground;
+- (NSColor*)colorFromRed:(int)red green:(int)green blue:(int)blue;
 - (NSColor*)selectionColor;
 - (NSColor*)defaultCursorColor;
 - (NSColor*)selectedTextColor;
@@ -436,6 +526,9 @@ typedef struct PTYFontInfo PTYFontInfo;
 - (void)setSelectedTextColor:(NSColor *)aColor;
 - (void)setCursorTextColor:(NSColor*)color;
 
+// Update the scroller color for light or dark backgrounds.
+- (void)updateScrollerForBackgroundColor;
+
 - (int)selectionStartX;
 - (int)selectionStartY;
 - (int)selectionEndX;
@@ -443,20 +536,26 @@ typedef struct PTYFontInfo PTYFontInfo;
 - (void)setSelectionFromX:(int)fromX fromY:(int)fromY toX:(int)toX toY:(int)toY;
 - (void)setRectangularSelection:(BOOL)isBox;
 
+// Remove underline indicating clickable URL.
+- (void)removeUnderline;
+
 - (double)excess;
 
 
 - (NSDictionary*)markedTextAttributes;
 - (void)setMarkedTextAttributes:(NSDictionary*)attr;
 
-- (id)dataSource;
-- (void)setDataSource:(id)aDataSource;
+- (id<PTYTextViewDataSource>)dataSource;
+- (void)setDataSource:(id<PTYTextViewDataSource>)aDataSource;
 - (id)delegate;
 - (void)setDelegate:(id)delegate;
 - (double)lineHeight;
 - (void)setLineHeight:(double)aLineHeight;
 - (double)charWidth;
 - (void)setCharWidth:(double)width;
+
+// Toggles whether line timestamps are displayed.
+- (void)toggleShowTimestamps;
 
 // Update the scroll position and schedule a redraw. Returns true if anything
 // onscreen is blinking.
@@ -494,6 +593,7 @@ typedef struct PTYFontInfo PTYFontInfo;
 
 // Scrolling control
 - (NSRect)adjustScroll:(NSRect)proposedVisibleRect;
+- (void)scrollLineNumberRangeIntoView:(VT100GridRange)range;
 - (void)scrollLineUp:(id)sender;
 - (void)scrollLineDown:(id)sender;
 - (void)scrollPageUp:(id)sender;
@@ -528,7 +628,6 @@ typedef struct PTYFontInfo PTYFontInfo;
 - (NSRange)selectedRange;
 - (NSArray *)validAttributesForMarkedText;
 - (NSAttributedString *)attributedSubstringFromRange:(NSRange)theRange;
-- (void)doCommandBySelector:(SEL)aSelector;
 - (unsigned int)characterIndexForPoint:(NSPoint)thePoint;
 - (long)conversationIdentifier;
 - (NSRect)firstRectForCharacterRange:(NSRange)theRange;
@@ -583,6 +682,11 @@ typedef struct PTYFontInfo PTYFontInfo;
 
 - (FindContext *)initialFindContext;
 
+- (NSString*)_allText;
+
+- (void)addViewForNote:(PTYNoteViewController *)note;
+- (void)updateNoteViewFrames;
+
 @end
 
 //
@@ -598,9 +702,6 @@ typedef enum {
     CHARTYPE_OTHER,       // Symbols, etc. Anything that doesn't fall into the other categories.
 } PTYCharType;
 
-- (void)modifyFont:(NSFont*)font baseline:(double)baseline info:(PTYFontInfo*)fontInfo;
-- (void)releaseFontInfo:(PTYFontInfo*)fontInfo;
-
 - (unsigned int) _checkForSupportedDragTypes:(id <NSDraggingInfo>) sender;
 
 - (void) _scrollToLine:(int)line;
@@ -613,19 +714,34 @@ typedef enum {
 - (PTYCharType)classifyChar:(unichar)ch
                   isComplex:(BOOL)complex;
 
-- (NSString *)_getURLForX:(int)x y:(int)y;
+- (NSString *)_getURLForX:(int)x
+                        y:(int)y
+     charsTakenFromPrefix:(int *)charsTakenFromPrefixPtr;
 // Returns true if any char in the line is blinking.
-- (BOOL)_drawLine:(int)line AtY:(double)curY toPoint:(NSPoint*)toPoint;
+- (BOOL)_drawLine:(int)line
+              AtY:(double)curY
+          toPoint:(NSPoint*)toPoint
+        charRange:(NSRange)charRange
+          context:(CGContextRef)ctx;
+
 - (void)_drawCursor;
 - (void)_drawCursorTo:(NSPoint*)toOrigin;
 - (void)_drawCharacter:(screen_char_t)screenChar
                fgColor:(int)fgColor
-    alternateSemantics:(BOOL)fgAlt
+               fgGreen:(int)fgGreen
+                fgBlue:(int)fgBlue
+           fgColorMode:(ColorMode)fgColorMode
                 fgBold:(BOOL)fgBold
                    AtX:(double)X
                      Y:(double)Y
            doubleWidth:(BOOL)double_width
-         overrideColor:(NSColor*)overrideColor;
+         overrideColor:(NSColor*)overrideColor
+               context:(CGContextRef)ctx;
+
+- (void)_drawRunsAt:(NSPoint)initialPoint
+                run:(CRun *)run
+            storage:(CRunStorage *)storage
+            context:(CGContextRef)ctx;
 
 - (BOOL)_isBlankLine:(int)y;
 - (void)_findUrlInString:(NSString *)aURLString andOpenInBackground:(BOOL)background;
@@ -648,14 +764,11 @@ typedef enum {
 - (void)_dragText:(NSString *)aString forEvent:(NSEvent *)theEvent;
 - (BOOL)_isCharSelectedInRow:(int)row col:(int)col checkOld:(BOOL)old;
 - (void)_settingsChanged:(NSNotification *)notification;
-- (void)_modifyFont:(NSFont*)font baseline:(double)baseline into:(PTYFontInfo*)fontInfo;
 - (PTYFontInfo*)getFontForChar:(UniChar)ch
                      isComplex:(BOOL)complex
-                       fgColor:(int)fgColor
-                    renderBold:(BOOL*)renderBold;
+                    renderBold:(BOOL*)renderBold
+                  renderItalic:(BOOL*)renderItalic;
 
-- (PTYFontInfo*)getOrAddFallbackFont:(NSFont*)font;
-- (void)releaseAllFallbackFonts;
 // Returns true if any onscreen text is blinking
 - (BOOL)updateDirtyRects;
 - (BOOL)isFutureTabSelectedAfterX:(int)x Y:(int)y;
@@ -677,7 +790,12 @@ typedef enum {
 // xStart, yStart: cell coordinates
 // width, height: cell width, height of screen
 // cursorHeight: cursor height in pixels
-- (BOOL)drawInputMethodEditorTextAt:(int)xStart y:(int)yStart width:(int)width height:(int)height cursorHeight:(double)cursorHeight;
+- (BOOL)drawInputMethodEditorTextAt:(int)xStart
+                                  y:(int)yStart
+                              width:(int)width
+                             height:(int)height
+                       cursorHeight:(double)cursorHeight
+                                ctx:(CGContextRef)ctx;
 
 - (BOOL)_wasAnyCharSelected;
 
@@ -685,6 +803,8 @@ typedef enum {
 - (BOOL) _updateBlink;
 // Returns true if any onscreen char is blinking.
 - (BOOL)_markChangedSelectionAndBlinkDirty:(BOOL)redrawBlink width:(int)width;
+
+- (void)highlightMarkOnLine:(int)line;
 
 @end
 

@@ -9,7 +9,9 @@
 #import "PointerPrefsController.h"
 #import "PointerController.h"
 #import "PreferencePanel.h"
+#import "iTermApplicationDelegate.h"
 #import "ITAddressBookMgr.h"
+#import "FutureMethods.h"
 
 static NSString *kPointerActionsKey = @"PointerActions";  // Used in NSUserDefaults
 static NSString *kActionKey = @"Action";  // Used within values
@@ -309,6 +311,8 @@ typedef enum {
                      kThreeFingerClickGesture,
                      kThreeFingerSwipeRight,
                      kThreeFingerSwipeLeft,
+                     kThreeFingerSwipeUp,
+                     kThreeFingerSwipeDown,
                      nil];
 
     NSUInteger i = [keys indexOfObject:ident];
@@ -621,6 +625,7 @@ typedef enum {
     NSString *key = [PointerPrefsController keyForButton:buttonNumber
                                                   clicks:numClicks
                                                modifiers:modMask];
+    DLog(@"Look up key %@", key);
     NSString *action = [[[PointerPrefsController settings] objectForKey:key] objectForKey:kActionKey];
     return action;
 }
@@ -655,6 +660,7 @@ typedef enum {
     NSString *key;
     key = [PointerPrefsController keyForGesture:gesture
                                       modifiers:modMask];
+    DLog(@"Look up action for gesture %@", key);
     return [[[PointerPrefsController settings] objectForKey:key] objectForKey:kActionKey];
 }
 
@@ -712,6 +718,8 @@ typedef enum {
 
 - (void)setButtonNumber:(int)buttonNumber clickCount:(int)clickCount modifiers:(int)modMask
 {
+    DLog(@"PointerPrefsController setButtonNumber:%d clickCount:%d modifiers:0x%x",
+         buttonNumber, clickCount, modMask);
     if (buttonNumber >= 1 && clickCount > 0 && clickCount < 5) {
         [editButton_ selectItemWithTag:buttonNumber];
         [editClickType_ selectItemWithTag:clickCount];

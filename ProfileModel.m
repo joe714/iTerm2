@@ -45,9 +45,12 @@ int gMigrated;
 
 - (ProfileModel*)init
 {
-    bookmarks_ = [[NSMutableArray alloc] init];
-    defaultBookmarkGuid_ = @"";
-    journal_ = [[NSMutableArray alloc] init];
+    self = [super init];
+    if (self) {
+        bookmarks_ = [[NSMutableArray alloc] init];
+        defaultBookmarkGuid_ = @"";
+        journal_ = [[NSMutableArray alloc] init];
+    }
     return self;
 }
 
@@ -568,6 +571,15 @@ int gMigrated;
     [self postChangeNotification];
 }
 
+- (NSArray *)names
+{
+    NSMutableArray *array = [NSMutableArray array];
+    for (Profile *profile in bookmarks_) {
+        [array addObject:[profile objectForKey:KEY_NAME]];
+    }
+    return array;
+}
+
 - (void)moveGuid:(NSString*)guid toRow:(int)destinationRow
 {
     int sourceRow = [self indexOfProfileWithGuid:guid];
@@ -650,8 +662,8 @@ int gMigrated;
     }
 
     // Add menu item with submenu
-    NSMenuItem* newItem = [[NSMenuItem alloc] initWithTitle:name action:nil keyEquivalent:@""];
-    [newItem setSubmenu:[[NSMenu alloc] init]];
+    NSMenuItem* newItem = [[[NSMenuItem alloc] initWithTitle:name action:nil keyEquivalent:@""] autorelease];
+    [newItem setSubmenu:[[[NSMenu alloc] init] autorelease]];
     [menu insertItem:newItem atIndex:pos];
 
     return [newItem submenu];

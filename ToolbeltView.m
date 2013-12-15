@@ -14,6 +14,34 @@
 #import "ToolNotes.h"
 #import "iTermApplicationDelegate.h"
 #import "iTermApplication.h"
+#import "FutureMethods.h"
+
+@interface ToolbeltSplitView : NSSplitView {
+    NSColor *dividerColor_;
+}
+
+- (void)setDividerColor:(NSColor *)dividerColor;
+
+@end
+
+@implementation ToolbeltSplitView
+
+- (void)dealloc {
+    [dividerColor_ release];
+    [super dealloc];
+}
+
+- (void)setDividerColor:(NSColor *)dividerColor {
+    [dividerColor_ autorelease];
+    dividerColor_ = [dividerColor retain];
+    [self setNeedsDisplay:YES];
+}
+
+- (NSColor *)dividerColor {
+    return dividerColor_;
+}
+
+@end
 
 @interface ToolbeltView (Private)
 
@@ -69,7 +97,7 @@ static NSString *kToolbeltPrefKey = @"ToolbeltTools";
             [[NSUserDefaults standardUserDefaults] setObject:items forKey:kToolbeltPrefKey];
         }
 
-        splitter_ = [[NSSplitView alloc] initWithFrame:NSMakeRect(0, 0, frame.size.width, frame.size.height)];
+        splitter_ = [[ToolbeltSplitView alloc] initWithFrame:NSMakeRect(0, 0, frame.size.width, frame.size.height)];
         [splitter_ setVertical:NO];
         [splitter_ setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
         [splitter_ setDividerStyle:NSSplitViewDividerStyleThin];
@@ -93,6 +121,10 @@ static NSString *kToolbeltPrefKey = @"ToolbeltTools";
     [super dealloc];
 }
 
+- (void)setUseDarkDividers:(BOOL)useDarkDividers {
+    [splitter_ setDividerColor:useDarkDividers ? [NSColor darkGrayColor] : [NSColor lightGrayColor]];
+}
+
 - (void)shutdown
 {
     while ([tools_ count]) {
@@ -104,6 +136,8 @@ static NSString *kToolbeltPrefKey = @"ToolbeltTools";
 		}
 		[wrapper setDelegate:nil];
         [tools_ removeObjectForKey:theName];
+        [[wrapper retain] autorelease];
+        [wrapper removeToolSubviews];
         [wrapper removeFromSuperview];
     }
 }
@@ -191,7 +225,6 @@ static NSString *kToolbeltPrefKey = @"ToolbeltTools";
 - (void)addTool:(NSView<ToolbeltTool> *)theTool toWrapper:(ToolWrapper *)wrapper
 {
     [splitter_ addSubview:wrapper];
-    [wrapper release];
     [wrapper.container addSubview:theTool];
 
     [wrapper setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
@@ -202,12 +235,18 @@ static NSString *kToolbeltPrefKey = @"ToolbeltTools";
 
 - (void)addToolWithName:(NSString *)toolName
 {
-    ToolWrapper *wrapper = [[ToolWrapper alloc] initWithFrame:NSMakeRect(0, 0, self.frame.size.width, self.frame.size.height / MAX(1, [ToolbeltView numberOfVisibleTools ] - 1))];
+    ToolWrapper *wrapper = [[[ToolWrapper alloc] initWithFrame:NSMakeRect(0,
+                                                                          0,
+                                                                          self.frame.size.width,
+                                                                          self.frame.size.height / MAX(1, [ToolbeltView numberOfVisibleTools ] - 1))] autorelease];
     wrapper.name = toolName;
     wrapper.term = term_;
 	wrapper.delegate = self;
     Class c = [gRegisteredTools objectForKey:toolName];
-    [self addTool:[[[c alloc] initWithFrame:NSMakeRect(0, 0, wrapper.container.frame.size.width, wrapper.container.frame.size.height)] autorelease]
+    [self addTool:[[[c alloc] initWithFrame:NSMakeRect(0,
+                                                       0,
+                                                       wrapper.container.frame.size.width,
+                                                       wrapper.container.frame.size.height)] autorelease]
         toWrapper:wrapper];
     [self setHaveOnlyOneTool:[self haveOnlyOneTool]];
 }

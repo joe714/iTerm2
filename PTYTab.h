@@ -31,9 +31,7 @@
 #import <Cocoa/Cocoa.h>
 #import "WindowControllerInterface.h"
 #import "PTYSplitView.h"
-
-static const int MIN_SESSION_ROWS = 2;
-static const int MIN_SESSION_COLUMNS = 2;
+#import "FutureMethods.h"
 
 @class PTYSession;
 @class PseudoTerminal;
@@ -114,7 +112,17 @@ static const int MIN_SESSION_COLUMNS = 2;
 
     // The last tmux parse tree
     NSMutableDictionary *parseTree_;
+
+    // Temporarily hidden live views (this is needed to hold a reference count).
+    NSMutableArray *hiddenLiveViews_;  // SessionView objects
+
+    NSString *tmuxWindowName_;
+
+	// This tab broadcasts to all its sessions?
+	BOOL broadcasting_;
 }
+
+@property(nonatomic, assign, getter=isBroadcasting) BOOL broadcasting;
 
 // init/dealloc
 - (id)initWithSession:(PTYSession*)session;
@@ -133,14 +141,11 @@ static const int MIN_SESSION_COLUMNS = 2;
 - (int)indexOfSessionView:(SessionView*)sessionView;
 
 - (void)setLockedSession:(PTYSession*)lockedSession;
-- (PTYSession*)activeSession;
 - (id<WindowControllerInterface>)parentWindow;
 - (PseudoTerminal*)realParentWindow;
 - (void)setParentWindow:(PseudoTerminal*)theParent;
 - (void)setFakeParentWindow:(FakeWindow*)theParent;
 - (FakeWindow*)fakeWindow;
-- (NSTabViewItem *)tabViewItem;
-- (void)setTabViewItem: (NSTabViewItem *)theTabViewItem;
 
 - (void)setBell:(BOOL)flag;
 - (void)nameOfSession:(PTYSession*)session didChangeTo:(NSString*)newName;
@@ -251,6 +256,8 @@ static const int MIN_SESSION_COLUMNS = 2;
 - (NSSize)tmuxSize;
 // Size we are given the current layout
 - (NSSize)maxTmuxSize;
+- (NSString *)tmuxWindowName;
+- (void)setTmuxWindowName:(NSString *)tmuxWindowName;
 
 - (int)tmuxWindow;
 - (BOOL)isTmuxTab;

@@ -31,69 +31,8 @@
 #define DEBUG_METHOD_TRACE    0
 
 #define kTabMRUKey kVK_Tab
-#define kTabMRUModifierMask NSControlKeyMask
 
 @implementation PTYTabView
-
-// Class methods that Apple should have provided
-+ (NSSize)contentSizeForFrameSize:(NSSize)frameSize
-                      tabViewType:(NSTabViewType)type
-                      controlSize:(NSControlSize)controlSize
-{
-    NSRect aRect, contentRect;
-    NSTabView *aTabView;
-    float widthOffset, heightOffset;
-
-    // make a temporary tabview
-    aRect = NSMakeRect(0, 0, 200, 200);
-    aTabView = [[NSTabView alloc] initWithFrame: aRect];
-    [aTabView setTabViewType: type];
-    [aTabView setControlSize: controlSize];
-
-    // grab its content size
-    contentRect = [aTabView contentRect];
-
-    // calculate the offsets between total frame and content frame
-    widthOffset = aRect.size.width - contentRect.size.width;
-    heightOffset = aRect.size.height - contentRect.size.height;
-    //NSLog(@"widthOffset = %f; heightOffset = %f", widthOffset, heightOffset);
-
-    // release the temporary tabview
-    [aTabView release];
-
-    // Apply the offset to the given frame size
-    return (NSMakeSize(frameSize.width - widthOffset, frameSize.height - heightOffset));
-}
-
-+ (NSSize)frameSizeForContentSize:(NSSize)contentSize
-                      tabViewType:(NSTabViewType)type
-                      controlSize:(NSControlSize)controlSize
-{
-    NSRect aRect, contentRect;
-    NSTabView *aTabView;
-    float widthOffset, heightOffset;
-
-    // make a temporary tabview
-    aRect = NSMakeRect(0, 0, 200, 200);
-    aTabView = [[NSTabView alloc] initWithFrame: aRect];
-    [aTabView setTabViewType: type];
-    [aTabView setControlSize: controlSize];
-
-    // grab its content size
-    contentRect = [aTabView contentRect];
-
-    // calculate the offsets between total frame and content frame
-    widthOffset = aRect.size.width - contentRect.size.width;
-    heightOffset = aRect.size.height - contentRect.size.height;
-    //NSLog(@"widthOffset = %f; heightOffset = %f", widthOffset, heightOffset);
-
-    // release the temporary tabview
-    [aTabView release];
-
-    // Apply the offset to the given content size
-    return (NSMakeSize(contentSize.width + widthOffset, contentSize.height + heightOffset));
-}
-
 
 - (id)initWithFrame:(NSRect) aRect
 {
@@ -215,7 +154,7 @@
 {
     NSTabViewItem* tabViewItem = [self selectedTabViewItem];
     NSUInteger theIndex = [mruTabs indexOfObject:tabViewItem] + 1;
-    if (theIndex < 0 || theIndex >= [mruTabs count]) {
+    if (theIndex == NSNotFound || theIndex >= [mruTabs count]) {
         theIndex = 0;
     }
     NSTabViewItem* next = [mruTabs objectAtIndex:theIndex];
@@ -225,9 +164,20 @@
 
 - (BOOL)onKeyPressed:(NSEvent*)event
 {
-    if ([event modifierFlags] & kTabMRUModifierMask && [event keyCode] == kTabMRUKey) {
-        wereTabsNavigatedWithMRU = YES;  
-        [self nextMRU];
+    if ([event keyCode] == kTabMRUKey) {
+        if (!isModifierPressed) {
+            // Initial press; set modifier mask from current modifiers
+            tabMRUModifierMask_ =
+                ([event modifierFlags] & (NSControlKeyMask |
+                                          NSCommandKeyMask |
+                                          NSAlternateKeyMask |
+                                          NSShiftKeyMask));
+            isModifierPressed = (tabMRUModifierMask_ != 0);
+        }
+        if (isModifierPressed) {
+            wereTabsNavigatedWithMRU = YES;
+            [self nextMRU];
+        }
         return YES;
     }
     return NO;
@@ -235,16 +185,12 @@
 
 - (BOOL)onFlagsChanged:(NSEvent*)event
 {
-    if ([event modifierFlags] & kTabMRUModifierMask) {
-        isModifierPressed = YES;
-        return YES;
-    }
-
-    if (isModifierPressed && (([event modifierFlags] & kTabMRUModifierMask) == 0)) {
+    if (isModifierPressed && (([event modifierFlags] & tabMRUModifierMask_) == 0)) {
+	// Modifiers released while cycling.
         isModifierPressed = NO;
         if (wereTabsNavigatedWithMRU) {
             wereTabsNavigatedWithMRU = NO;
-            
+
             // While this looks like a no-op, it has the effect of re-ordering the MRU list.
             [self selectTabViewItem:[self selectedTabViewItem]];
         }

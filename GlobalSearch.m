@@ -27,13 +27,14 @@
  */
 
 #import "GlobalSearch.h"
-#import "VT100Screen.h"
+#import "PTYSession.h"
+#import "PTYTextView.h"
 #import "PTYTextView.h"
 #import "PseudoTerminal.h"
-#import "PTYSession.h"
+#import "SearchResult.h"
+#import "VT100Screen.h"
 #import "iTermController.h"
 #import "iTermExpose.h"
-#import "PTYTextView.h"
 #import "iTermSearchField.h"
 
 const double GLOBAL_SEARCH_MARGIN = 10;
@@ -41,13 +42,13 @@ const double GLOBAL_SEARCH_MARGIN = 10;
 @interface GlobalSearchInstance : NSObject
 {
     PTYTextView* textView_;
-    VT100Screen* theScreen_;
+    id<PTYTextViewDataSource> textViewDataSource_;
     PTYSession* theSession_;
     NSMutableArray* results_;
     BOOL more_;
     NSString* findString_;
     NSString* label_;
-    FindContext findContext_;
+    FindContext *findContext_;
     NSMutableSet* matchLocations_;
 }
 
@@ -178,19 +179,21 @@ const double GLOBAL_SEARCH_MARGIN = 10;
         findString_ = [findString copy];
         more_ = YES;
         textView_ = textView;
-        theScreen_ = [textView dataSource];  // TODO: this is a weak ref. Be on the lookout for its death.
-        theSession_ = [theScreen_ session];
+        textViewDataSource_ = [textView dataSource];  // TODO: this is a weak ref. Be on the lookout for its death.
+        theSession_ = [textViewDataSource_ session];
         label_ = [label retain];
-        [theScreen_ initFindString:findString_
-                  forwardDirection:NO
-                      ignoringCase:YES
-                             regex:NO
-                       startingAtX:0
-                       startingAtY:(long long)([theScreen_ numberOfLines] + 1) + [theScreen_ totalScrollbackOverflow]
-                        withOffset:0  // 1?
-                         inContext:&findContext_
-                   multipleResults:NO];
+        findContext_ = [[FindContext alloc] init];
+        [textViewDataSource_ setFindString:findString_
+                          forwardDirection:NO
+                              ignoringCase:YES
+                                     regex:NO
+                               startingAtX:0
+                               startingAtY:(long long)([textViewDataSource_ numberOfLines] + 1) + [textViewDataSource_ totalScrollbackOverflow]
+                                withOffset:0  // 1?
+                                 inContext:findContext_
+                           multipleResults:NO];
         matchLocations_ = [[NSMutableSet alloc] init];
+        findContext_.maxTime = 0.01;
         findContext_.hasWrapped = YES;
     }
     return self;
@@ -202,6 +205,7 @@ const double GLOBAL_SEARCH_MARGIN = 10;
     [results_ release];
     [findString_ release];
     [label_ release];
+    [findContext_ release];
     [super dealloc];
 }
 
@@ -220,73 +224,43 @@ const double GLOBAL_SEARCH_MARGIN = 10;
     return label_;
 }
 
-- (BOOL)_emitResultFromX:(int)startX y:(int)startY toX:(int)endX y:(int)endY
+- (BOOL)_emitResultFromX:(int)startX absY:(int)absY toX:(int)endX absY:(int)absEndY
 {
     // Don't add the same line twice.
-    long long absY = startY + [[textView_ dataSource] totalScrollbackOverflow];
     NSNumber* setObj = [NSNumber numberWithLongLong:absY];
     if ([matchLocations_ containsObject:setObj]) {
         return NO;
     }
     [matchLocations_ addObject:setObj];
-    
+
     NSString* theContext = [textView_ contentFromX:0
-                                                 Y:startY
-                                               ToX:[theScreen_ width] - 1
-                                                 Y:endY
-                                               pad:NO];
+                                                 Y:absY
+                                               ToX:[textViewDataSource_ width] - 1
+                                                 Y:absEndY - [[textView_ dataSource] totalScrollbackOverflow]
+                                               pad:NO
+                                includeLastNewline:NO
+                            trimTrailingWhitespace:YES];
     theContext = [theContext stringByReplacingOccurrencesOfString:@"\n"
                                                        withString:@" "];
-    [results_ addObject:[[GlobalSearchResult alloc] initWithInstance:self
-                                                             context:theContext 
-                                                                   x:startX
-                                                                absY:absY
-                                                                endX:endX
-                                                                   y:endY + [[textView_ dataSource] totalScrollbackOverflow]
-                                                          findString:findString_]];
+    [results_ addObject:[[[GlobalSearchResult alloc] initWithInstance:self
+                                                              context:theContext
+                                                                    x:startX
+                                                                 absY:absY
+                                                                 endX:endX
+                                                                    y:absEndY
+                                                           findString:findString_] autorelease]];
     return YES;
 }
 
 - (int)doSearch
 {
-    BOOL more;
-    BOOL found;
-    int newResults = 0;
-    NSDate* begin = [NSDate date];
-    NSDate* now;
-    const double kMaxTime = 0.01;
-    do {
-        int startX;
-        int startY;
-        int endX;
-        int endY;
-        more = [theScreen_ continueFindResultAtStartX:&startX
-                                             atStartY:&startY
-                                               atEndX:&endX
-                                               atEndY:&endY
-                                                found:&found
-                                            inContext:&findContext_];
-
-        if (found) {
-            if ([self _emitResultFromX:startX y:startY toX:endX y:endY]) {
-                ++newResults;
-            }
-            [theScreen_ initFindString:findString_
-                      forwardDirection:NO
-                          ignoringCase:YES
-                                 regex:NO
-                           startingAtX:startX
-                           startingAtY:startY
-                            withOffset:1
-                             inContext:&findContext_
-                       multipleResults:NO];
-            findContext_.hasWrapped = YES;
-        }
-        now = [NSDate date];
-    } while ((found || more) && [now timeIntervalSinceDate:begin] < kMaxTime);
-
-    more_ = (found || more);
-    return newResults;    
+    NSMutableArray *results = [NSMutableArray array];
+    more_ = [textViewDataSource_ continueFindAllResults:results inContext:findContext_];
+    for (SearchResult *result in results) {
+        [self _emitResultFromX:result->startX absY:result->absStartY toX:result->endX absY:result->absEndY];
+    }
+    // TODO Test this! It used to use the deprecated API.
+    return results.count;
 }
 
 - (PTYTextView*)textView
@@ -548,11 +522,11 @@ const double GLOBAL_SEARCH_MARGIN = 10;
                 }
             }
             GlobalSearchInstance* aSearch;
-            aSearch = [[GlobalSearchInstance alloc] initWithTextView:[aSession TEXTVIEW]
-                                                          findString:findString
-                                                               label:[iTermExpose labelForTab:[aSession tab]
-                                                                                 windowNumber:i+1
-                                                                                    tabNumber:j+1]];
+            aSearch = [[[GlobalSearchInstance alloc] initWithTextView:[aSession TEXTVIEW]
+                                                           findString:findString
+                                                                label:[iTermExpose labelForTab:[aSession tab]
+                                                                                  windowNumber:i+1
+                                                                                     tabNumber:j+1]] autorelease];
             [searches_ addObject:aSearch];
         }
         i++;

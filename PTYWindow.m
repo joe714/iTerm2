@@ -32,9 +32,9 @@
 #import "PTYWindow.h"
 #import "PreferencePanel.h"
 #import "PseudoTerminal.h"
+#import "FutureMethods.h"
 #import "iTermController.h"
-// This is included because the blurring code uses undocumented APIs to do its thing.
-#import <CGSInternal.h>
+#import "iTermApplicationDelegate.h"
 
 #define DEBUG_METHOD_ALLOC  0
 #define DEBUG_METHOD_TRACE  0
@@ -43,7 +43,12 @@
 #ifdef PSEUDOTERMINAL_VERBOSE_LOGGING
 #define PtyLog NSLog
 #else
-#define PtyLog(args...)
+#define PtyLog(args...) \
+    do { \
+        if (gDebugLogging) { \
+            DebugLog([NSString stringWithFormat:args]); \
+        } \
+    } while (0)
 #endif
 
 @implementation PTYWindow
@@ -77,31 +82,12 @@
     return self;
 }
 
-typedef CGError CGSSetWindowBackgroundBlurRadiusFunction(CGSConnectionID cid, CGSWindowID wid, NSUInteger blur);
-
-static void *GetFunctionByName(NSString *library, char *func) {
-    CFBundleRef bundle;
-    CFURLRef bundleURL = CFURLCreateWithFileSystemPath(kCFAllocatorDefault, (CFStringRef) library, kCFURLPOSIXPathStyle, true);
-    CFStringRef functionName = CFStringCreateWithCString(kCFAllocatorDefault, func, kCFStringEncodingASCII);    
-    bundle = CFBundleCreate(kCFAllocatorDefault, bundleURL);
-    if (!bundle) {
-        return NULL;
-    }
-    void *f = CFBundleGetFunctionPointerForName(bundle, functionName);
-    CFRelease(functionName);
-    CFRelease(bundleURL);
-    CFRelease(bundle);
-    return f;
-}
-
-static CGSSetWindowBackgroundBlurRadiusFunction* GetCGSSetWindowBackgroundBlurRadiusFunction() {
-    static BOOL tried = NO;
-    static CGSSetWindowBackgroundBlurRadiusFunction *function = NULL;
-    if (!tried) {
-        function  = GetFunctionByName(@"/System/Library/Frameworks/ApplicationServices.framework",
-                                      "CGSSetWindowBackgroundBlurRadius");
-    }
-    return function;
+- (NSString *)description
+{
+    return [NSString stringWithFormat:@"<%@: %p frame=%@>",
+            [self class],
+            self,
+            [NSValue valueWithRect:self.frame]];
 }
 
 - (void)encodeRestorableStateWithCoder:(NSCoder *)coder
@@ -135,20 +121,10 @@ static CGSSetWindowBackgroundBlurRadiusFunction* GetCGSSetWindowBackgroundBlurRa
         return;
     }
     CGSSetWindowBackgroundBlurRadiusFunction* function = GetCGSSetWindowBackgroundBlurRadiusFunction();
-    if (IsLionOrLater() && function) {
-        // If CGSSetWindowBackgroundBlurRadius() is available (10.6 and up) use it because it works
-        // right in Exposé.
+    if (function) {
         function(con, [self windowNumber], (int)radius);
     } else {
-        // Fall back to 10.5-only method.
-        if (CGSNewCIFilterByName(con, (CFStringRef)@"CIGaussianBlur", &blurFilter)) {
-            return;
-        }
-
-        NSDictionary *optionsDict = [NSDictionary dictionaryWithObject:[NSNumber numberWithFloat:radius] forKey:@"inputRadius"];
-        CGSSetCIFilterValuesFromDictionary(con, blurFilter, (CFDictionaryRef)optionsDict);
-
-        CGSAddWindowFilter(con, [self windowNumber], blurFilter, kCGWindowFilterUnderlay);
+        NSLog(@"Couldn't get blur function");
     }
     blurRadius_ = radius;
 #endif
@@ -166,7 +142,7 @@ static CGSSetWindowBackgroundBlurRadiusFunction* GetCGSSetWindowBackgroundBlurRa
     }
 
     CGSSetWindowBackgroundBlurRadiusFunction* function = GetCGSSetWindowBackgroundBlurRadiusFunction();
-    if (IsLionOrLater() && function) {
+    if (function) {
         function(con, [self windowNumber], 0);
     } else if (blurFilter) {
         CGSRemoveWindowFilter(con, (CGSWindowID)[self windowNumber], blurFilter);
@@ -176,14 +152,26 @@ static CGSSetWindowBackgroundBlurRadiusFunction* GetCGSSetWindowBackgroundBlurRa
 #endif
 }
 
+- (id<PTYWindowDelegateProtocol>)ptyDelegate {
+    return (id<PTYWindowDelegateProtocol>)[self delegate];
+}
+
 - (void)toggleFullScreen:(id)sender
 {
-    // This is a way of calling [super toggleFullScreen:] that doesn't give a warning if
-    // the method doesn't exist (it's new in 10.7) but we build against 10.5 sdk.
-    IMP functionPointer = [NSWindow instanceMethodForSelector:_cmd];
-    isTogglingLionFullScreen_ = true;
-    functionPointer(self, _cmd, sender);
-    isTogglingLionFullScreen_ = false;
+    if (![[self ptyDelegate] lionFullScreen]  &&
+        ![[PreferencePanel sharedInstance] lionStyleFullscreen]) {
+        // The user must have clicked on the toolbar arrow, but the pref is set
+        // to use traditional fullscreen.
+        [[self delegate] performSelector:@selector(toggleTraditionalFullScreenMode)
+                              withObject:nil];
+    } else {
+        // This is a way of calling [super toggleFullScreen:] that doesn't give a warning if
+        // the method doesn't exist (it's new in 10.7) but we build against 10.5 sdk.
+        IMP functionPointer = [NSWindow instanceMethodForSelector:_cmd];
+        isTogglingLionFullScreen_ = true;
+        functionPointer(self, _cmd, sender);
+        isTogglingLionFullScreen_ = false;
+    }
 }
 
 - (BOOL)isTogglingLionFullScreen
@@ -198,13 +186,20 @@ static CGSSetWindowBackgroundBlurRadiusFunction* GetCGSSetWindowBackgroundBlurRa
 
 - (void)smartLayout
 {
+    PtyLog(@"enter smartLayout");
     NSEnumerator* iterator;
 
 #if MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_4
-    CGSConnectionID con = CGSMainConnectionID();
-    if (!con) return;
-    CGSWorkspaceID currentSpace = -1;
-    CGSGetWorkspace(con, &currentSpace);
+    CGSWorkspaceID currentSpace = -1;  // Valid only before 10.8 Mountain Lion.
+    CGSConnectionID con;
+    if (!IsMountainLionOrLater()) {
+        con = CGSMainConnectionID();
+        if (!con) {
+            PtyLog(@"CGSMainConnectionID failed");
+            return;
+        }
+        CGSGetWorkspace(con, &currentSpace);
+    }
 #endif
 
     int currentScreen = [self screenNumber];
@@ -214,19 +209,38 @@ static CGSSetWindowBackgroundBlurRadiusFunction* GetCGSSetWindowBackgroundBlurRa
     NSMutableArray* windows = [[NSMutableArray alloc] init];
     iterator = [[[iTermController sharedInstance] terminals] objectEnumerator];
     PseudoTerminal* term;
+    PtyLog(@"Begin iterating over terminals");
     while ((term = [iterator nextObject])) {
         PTYWindow* otherWindow = (PTYWindow*)[term window];
-        if(otherWindow == self) continue;
-
+        PtyLog(@"See window %@ at %@", otherWindow, [NSValue valueWithRect:[otherWindow frame]]);
+        if (otherWindow == self) {
+            PtyLog(@" skip - is self");
+            continue;
+        }
         int otherScreen = [otherWindow screenNumber];
-        if(otherScreen != currentScreen) continue;
+        if (otherScreen != currentScreen) {
+            PtyLog(@" skip - screen %d vs my %d", otherScreen, currentScreen);
+            continue;
+        }
 
 #if MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_4
-        CGSWorkspaceID otherSpace = -1;
-        CGSGetWindowWorkspace(con, [otherWindow windowNumber], &otherSpace);
-        if(otherSpace != currentSpace) continue;
-#endif
 
+        if (IsMountainLionOrLater()) {
+            // CGSGetWindowWorkspace broke in 10.8.
+            if (![otherWindow isOnActiveSpace]) {
+                PtyLog(@"  skip - not in active space");
+                continue;
+            }
+        } else {
+            CGSWorkspaceID otherSpace = -1;
+            CGSGetWindowWorkspace(con, [otherWindow windowNumber], &otherSpace);
+            if (otherSpace != currentSpace) {
+                PtyLog(@" skip - different space %d vs my %d", otherSpace, currentSpace);
+                continue;
+            }
+        }
+#endif
+        PtyLog(@" add window to array of windows");
         [windows addObject:otherWindow];
     }
 
@@ -238,12 +252,15 @@ static CGSSetWindowBackgroundBlurRadiusFunction* GetCGSSetWindowBackgroundBlurRa
     NSRect placementRect = NSMakeRect(
         screenRect.origin.x,
         screenRect.origin.y,
-        screenRect.size.width-[self frame].size.width,
-        screenRect.size.height-[self frame].size.height
+        MAX(1, screenRect.size.width-[self frame].size.width),
+        MAX(1, screenRect.size.height-[self frame].size.height)
     );
+    PtyLog(@"PlacementRect is %@", [NSValue valueWithRect:placementRect]);
 
     for(int x = 0; x < placementRect.size.width/2; x += 50) {
         for(int y = 0; y < placementRect.size.height/2; y += 50) {
+            PtyLog(@"Try coord %d,%d", x, y);
+
             NSRect testRects[4] = {[self frame]};
 
             // Top Left
@@ -262,7 +279,9 @@ static CGSSetWindowBackgroundBlurRadiusFunction* GetCGSSetWindowBackgroundBlurRa
             testRects[3] = testRects[1];
             testRects[3].origin.y = placementRect.origin.y + y;
 
-            for(int i = 0; i < sizeof(testRects)/sizeof(NSRect); i++) {
+            for (int i = 0; i < sizeof(testRects)/sizeof(NSRect); i++) {
+                PtyLog(@"compute badness of test rect %d %@", i, [NSValue valueWithRect:testRects[i]]);
+
                 iterator = [windows objectEnumerator];
                 PTYWindow* other;
                 float badness = 0.0f;
@@ -270,20 +289,23 @@ static CGSSetWindowBackgroundBlurRadiusFunction* GetCGSSetWindowBackgroundBlurRa
                     NSRect otherFrame = [other frame];
                     NSRect intersection = NSIntersectionRect(testRects[i], otherFrame);
                     badness += intersection.size.width * intersection.size.height;
+                    PtyLog(@"badness of %@ is %.2f", other, intersection.size.width * intersection.size.height);
                 }
 
-#if DEBUG_WINDOW_LAYOUT
-                static const char const * names[] = {"TL", "TR", "BL", "BR"};
-                NSLog(@"%s: testRect:%@, bad:%.2f", names[i], NSStringFromRect(testRects[i]), badness);
-#endif
 
-                if(badness < bestIntersect) {
+                char const * names[] = {"TL", "TR", "BL", "BR"};
+                PtyLog(@"%s: testRect:%@, bad:%.2f",
+                        names[i], NSStringFromRect(testRects[i]), badness);
+
+                if (badness < bestIntersect) {
+                    PtyLog(@"This is the best coordinate found so far");
                     bestIntersect = badness;
                     bestFrame = testRects[i];
                 }
 
                 // Shortcut if we've found an empty spot
-                if(bestIntersect == 0) {
+                if (bestIntersect == 0) {
+                    PtyLog(@"zero badness. Done.");
                     goto end;
                 }
             }
@@ -292,20 +314,26 @@ static CGSSetWindowBackgroundBlurRadiusFunction* GetCGSSetWindowBackgroundBlurRa
 
 end:
     [windows release];
-    [super setFrameOrigin:bestFrame.origin];
+    PtyLog(@"set frame origin to %@", [NSValue valueWithPoint:bestFrame.origin]);
+    [self setFrameOrigin:bestFrame.origin];
 }
 
 - (void)setLayoutDone
 {
+    PtyLog(@"setLayoutDone %@", [NSThread callStackSymbols]);
     layoutDone = YES;
 }
 
 - (void)makeKeyAndOrderFront:(id)sender
 {
+    PtyLog(@"PTYWindow makeKeyAndOrderFront: layoutDone=%d %@", (int)layoutDone, [NSThread callStackSymbols]);
     if (!layoutDone) {
-        layoutDone = YES;
+        PtyLog(@"try to call windowWillShowInitial");
+        [self setLayoutDone];
         if ([[self delegate] respondsToSelector:@selector(windowWillShowInitial)]) {
             [[self delegate] performSelector:@selector(windowWillShowInitial)];
+        } else {
+            PtyLog(@"delegate %@ does not respond", [self delegate]);
         }
     }
     PtyLog(@"PTYWindow - calling makeKeyAndOrderFont, which triggers a window resize");

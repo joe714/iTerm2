@@ -35,7 +35,7 @@
     return ec ? [classes_ objectForKey:ec] : nil;
 }
 
-- (void)addValue:(NSObject *)value toClass:(NSNumber *)ec
+- (void)addValue:(NSObject<NSCopying> *)value toClass:(NSNumber *)ec
 {
     [self removeValue:value];
     [index_ setObject:ec forKey:value];
@@ -47,7 +47,7 @@
     [theSet addObject:value];
 }
 
-- (NSNumber *)newEquivalenceClass
+- (NSNumber *)addEquivalenceClass
 {
     int i = 0;
     while ([classes_ objectForKey:[NSNumber numberWithInt:i]]) {
@@ -56,7 +56,7 @@
     return [NSNumber numberWithInt:i];
 }
 
-- (void)setValue:(NSObject *)n1 equalToValue:(NSObject *)n2
+- (void)setValue:(NSObject<NSCopying> *)n1 equalToValue:(NSObject<NSCopying> *)n2
 {
     NSNumber *n1Class = [index_ objectForKey:n1];
     NSNumber *n2Class = [index_ objectForKey:n2];
@@ -80,14 +80,14 @@
             [self addValue:n1 toClass:n2Class];
         } else {
             // Neither n1 nor n2 has an existing relation so create a new equivalence class
-            NSNumber *ec = [self newEquivalenceClass];
+            NSNumber *ec = [self addEquivalenceClass];
             [self addValue:n2 toClass:ec];
             [self addValue:n1 toClass:ec];
         }
     }
 }
 
-- (void)removeValue:(NSObject *)target
+- (void)removeValue:(NSObject<NSCopying> *)target
 {
     NSNumber *ec = [index_ objectForKey:target];
     if (!ec) {

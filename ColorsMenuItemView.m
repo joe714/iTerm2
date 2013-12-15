@@ -107,9 +107,9 @@ enum {
             break;
         case kMenuItemGray:
             gradient = [[NSGradient alloc] initWithColorsAndLocations:
-                        [NSColor colorWithDeviceWhite:212.0/255.0 alpha:1.0], 0.0,
-                        [NSColor colorWithDeviceWhite:182.0/255.0 alpha:1.0], 0.5,
-                        [NSColor colorWithDeviceWhite:151.0/255.0 alpha:1.0], 1.0, nil];
+                        [NSColor colorWithDeviceRed:212.0/255.0 green:212.0/255.0 blue:212.0/255.0 alpha:1.0], 0.0,
+                        [NSColor colorWithDeviceRed:212.0/255.0 green:212.0/255.0 blue:212.0/255.0 alpha:1.0], 0.5,
+                        [NSColor colorWithDeviceRed:212.0/255.0 green:212.0/255.0 blue:212.0/255.0 alpha:1.0], 1.0, nil];
             break;
     }
 
@@ -123,7 +123,8 @@ enum {
     // draw the "x" (reset color to default)
     NSColor *color = [NSColor grayColor];
     [color set];
-    [NSBezierPath setDefaultLineWidth: kDefaultColorStokeWidth];
+    CGFloat savedWidth = [NSBezierPath defaultLineWidth];
+    [NSBezierPath setDefaultLineWidth:kDefaultColorStokeWidth];
     float defaultX0 = kColorAreaOffsetX + kDefaulColorOffset;
     float defaultX1 = defaultX0 + kDefaultColorDimension;
     float defaultY0 = kColorAreaOffsetY + kDefaulColorOffset;
@@ -132,7 +133,6 @@ enum {
                               toPoint:NSMakePoint(defaultX1, defaultY1)];
     [NSBezierPath strokeLineFromPoint:NSMakePoint(defaultX1, defaultY0)
                               toPoint:NSMakePoint(defaultX0, defaultY1)];
-    [color release];
 
     // draw the colors
     NSGradient *outlineGradient = [[NSGradient alloc] initWithStartingColor:[NSColor colorWithDeviceWhite:0.0 alpha:0.3]
@@ -157,6 +157,7 @@ enum {
     NSString *labelTitle = @"Tab Color:";
     [labelTitle drawAtPoint:NSMakePoint(kMenuLabelOffsetX, kMenuLabelOffsetY) withAttributes:fontAtts];
     [fontAtts release];
+    [NSBezierPath setDefaultLineWidth:savedWidth];
 }
 
 - (void)mouseUp:(NSEvent*) event {
@@ -197,7 +198,7 @@ enum {
                     color_ = [NSColor colorWithDeviceRed:193.0/255.0 green:142.0/255.0 blue:217.0/255.0 alpha:1.0];
                     break;
                 case kMenuItemGray:
-                    color_ = [NSColor colorWithDeviceWhite:174.0/255.0 alpha:1.0];
+                    color_ = [NSColor colorWithDeviceRed:174.0/255.0 green:174.0/255.0 blue:174.0/255.0 alpha:1.0];
                     break;
             }
             // perform the menu action (set the color)

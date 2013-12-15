@@ -26,36 +26,40 @@
  */
 
 #import "iTermApplicationDelegate.h"
-#import "iTermController.h"
-#import "ITAddressBookMgr.h"
-#import "PreferencePanel.h"
-#import "PseudoTerminal.h"
-#import "PTYSession.h"
-#import "VT100Terminal.h"
-#import "PTYWindow.h"
-#import "PTYTextView.h"
-#import "NSStringITerm.h"
-#import "ProfilesWindow.h"
-#import "PTYTab.h"
-#import "iTermExpose.h"
+
 #import "ColorsMenuItemView.h"
-#include <unistd.h>
+#import "HotkeyWindowController.h"
+#import "ITAddressBookMgr.h"
+#import "NSStringITerm.h"
+#import "NSView+RecursiveDescription.h"
+#import "PTYSession.h"
+#import "PTYTab.h"
+#import "PTYTextView.h"
+#import "PTYWindow.h"
+#import "PreferencePanel.h"
+#import "ProfilesWindow.h"
+#import "PseudoTerminal.h"
+#import "PseudoTerminalRestorer.h"
+#import "ToastWindowController.h"
+#import "VT100Terminal.h"
+#import "iTermController.h"
+#import "iTermExpose.h"
+#import "iTermFontPanel.h"
+#import <objc/runtime.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 static NSString *APP_SUPPORT_DIR = @"~/Library/Application Support/iTerm";
 static NSString *SCRIPT_DIRECTORY = @"~/Library/Application Support/iTerm/Scripts";
 static NSString* AUTO_LAUNCH_SCRIPT = @"~/Library/Application Support/iTerm/AutoLaunch.scpt";
 static NSString *ITERM2_FLAG = @"~/Library/Application Support/iTerm/version.txt";
+static NSString *ITERM2_QUIET = @"~/Library/Application Support/iTerm/quiet";
 static NSString *kUseBackgroundPatternIndicatorKey = @"Use background pattern indicator";
 NSString *kUseBackgroundPatternIndicatorChangedNotification = @"kUseBackgroundPatternIndicatorChangedNotification";
 static BOOL gStartupActivitiesPerformed = NO;
 // Prior to 8/7/11, there was only one window arrangement, always called Default.
 static NSString *LEGACY_DEFAULT_ARRANGEMENT_NAME = @"Default";
-NSMutableString* gDebugLogStr = nil;
-NSMutableString* gDebugLogStr2 = nil;
 static BOOL ranAutoLaunchScript = NO;
-BOOL gDebugLogging = NO;
-int gDebugLogFile = -1;
 static BOOL hasBecomeActive = NO;
 
 @interface iTermApplicationDelegate ()
@@ -99,7 +103,6 @@ static BOOL hasBecomeActive = NO;
 
     [ToolbeltView populateMenu:toolbeltMenu];
     [self _updateToolbeltMenuItem];
-    [self setFutureApplicationPresentationOptions:NSApplicationPresentationFullScreen unset:0];
 }
 
 - (void)setFutureApplicationPresentationOptions:(int)flags unset:(int)antiflags
@@ -109,7 +112,7 @@ static BOOL hasBecomeActive = NO;
         // while compiling against the 10.5 SDK.
 
         // presentationOptions =  [NSApp presentationOptions]
-        NSMethodSignature *presentationOptionsSignature = [NSApp->isa
+        NSMethodSignature *presentationOptionsSignature = [object_getClass(NSApp)
             instanceMethodSignatureForSelector:@selector(presentationOptions)];
         NSInvocation *presentationOptionsInvocation = [NSInvocation
             invocationWithMethodSignature:presentationOptionsSignature];
@@ -124,7 +127,7 @@ static BOOL hasBecomeActive = NO;
         presentationOptions &= ~antiflags;
 
         // [NSAppObj setPresentationOptions:presentationOptions];
-        NSMethodSignature *setSig = [NSApp->isa instanceMethodSignatureForSelector:@selector(setPresentationOptions:)];
+        NSMethodSignature *setSig = [object_getClass(NSApp) instanceMethodSignatureForSelector:@selector(setPresentationOptions:)];
         NSInvocation *setInv = [NSInvocation invocationWithMethodSignature:setSig];
         [setInv setTarget:NSApp];
         [setInv setSelector:@selector(setPresentationOptions:)];
@@ -181,9 +184,10 @@ static BOOL hasBecomeActive = NO;
             // Open the saved arrangement at startup.
             [[iTermController sharedInstance] loadWindowArrangementWithName:[WindowArrangements defaultArrangementName]];
         } else {
-            // Make sure at least one window is open.
-            if ([[[iTermController sharedInstance] terminals] count] == 0) {
-                [self newWindow:nil];
+            if (![PseudoTerminalRestorer willOpenWindows]) {
+                if ([[[iTermController sharedInstance] terminals] count] == 0) {
+                    [self newWindow:nil];
+                }
             }
         }
     }
@@ -258,11 +262,39 @@ static BOOL hasBecomeActive = NO;
     CFStringRef unixExecutableContentType = (CFStringRef)@"public.unix-executable";
     CFStringRef unixHandler = LSCopyDefaultRoleHandlerForContentType(unixExecutableContentType, kLSRolesShell);
     NSString *iTermBundleId = [[NSBundle mainBundle] bundleIdentifier];
-    return [iTermBundleId isEqualToString:(NSString *)unixHandler];
+    BOOL result = [iTermBundleId isEqualToString:(NSString *)unixHandler];
+    if (unixHandler) {
+        CFRelease(unixHandler);
+    }
+    return result;
+}
+
+- (NSString *)quietFileName {
+    return [ITERM2_QUIET stringByExpandingTildeInPath];
+}
+
+- (BOOL)quietFileExists {
+    return [[NSFileManager defaultManager] fileExistsAtPath:[self quietFileName]];
+}
+
+- (void)checkForQuietMode {
+    if ([self quietFileExists]) {
+        NSError *error = nil;
+        [[NSFileManager defaultManager] removeItemAtPath:[self quietFileName]
+                                                   error:&error];
+        if (error) {
+            NSLog(@"Failed to remove %@: %@; not launching in quiet mode", [self quietFileName], error);
+        } else {
+            NSLog(@"%@ exists, launching in quiet mode", [self quietFileName]);
+            quiet_ = YES;
+        }
+    }
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)aNotification
 {
+    [iTermFontPanel makeDefault];
+
     finishedLaunching_ = YES;
     // Create the app support directory
     [self _createFlag];
@@ -278,11 +310,15 @@ static BOOL hasBecomeActive = NO;
                              kCFPreferencesCurrentApplication);
 
     PreferencePanel* ppanel = [PreferencePanel sharedInstance];
-    if ([ppanel hotkey]) {
-        [[iTermController sharedInstance] registerHotkey:[ppanel hotkeyCode] modifiers:[ppanel hotkeyModifiers]];
+    // Code could be 0 (e.g., A on an American keyboard) and char is also sometimes 0 (seen in bug 2501).
+    if ([ppanel hotkey] && ([ppanel hotkeyCode] || [ppanel hotkeyChar])) {
+        [[HotkeyWindowController sharedInstance] registerHotkey:[ppanel hotkeyCode] modifiers:[ppanel hotkeyModifiers]];
     }
     if ([ppanel isAnyModifierRemapped]) {
-        [[iTermController sharedInstance] beginRemappingModifiers];
+        // Use a brief delay so windows have a chance to open before the dialog is shown.
+        [[HotkeyWindowController sharedInstance] performSelector:@selector(beginRemappingModifiers)
+                                                      withObject:nil
+                                                      afterDelay:0.5];
     }
     [self _updateArrangementsMenu:windowArrangements_];
 
@@ -291,9 +327,12 @@ static BOOL hasBecomeActive = NO;
                                                        returnTypes:[NSArray arrayWithObjects:NSFilenamesPboardType, NSStringPboardType, nil]];
     // Sometimes, open untitled doc isn't called in Lion. We need to give application:openFile:
     // a chance to run because a "special" filename cancels _performStartupActivities.
+    [self checkForQuietMode];
     [self performSelector:@selector(_performStartupActivities)
                withObject:nil
                afterDelay:0];
+    [[NSNotificationCenter defaultCenter] postNotificationName:kApplicationDidFinishLaunchingNotification
+                                                        object:nil];
 }
 
 - (BOOL)applicationShouldTerminate:(NSNotification *)theNotification
@@ -334,7 +373,7 @@ static BOOL hasBecomeActive = NO;
     }
 
     // Ensure [iTermController dealloc] is called before prefs are saved
-    [[iTermController sharedInstance] stopEventTap];
+    [[HotkeyWindowController sharedInstance] stopEventTap];
     [iTermController sharedInstanceRelease];
 
     // save preferences
@@ -406,7 +445,16 @@ static BOOL hasBecomeActive = NO;
 
 - (void)applicationWillTerminate:(NSNotification *)aNotification
 {
-    [[iTermController sharedInstance] stopEventTap];
+    [[HotkeyWindowController sharedInstance] stopEventTap];
+}
+
+- (PseudoTerminal *)terminalToOpenFileIn
+{
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"OpenFileInNewWindows"]) {
+        return nil;
+    } else {
+        return [self currentTerminal];
+    }
 }
 
 /**
@@ -433,21 +481,19 @@ static BOOL hasBecomeActive = NO;
     if ([filename isEqualToString:[ITERM2_FLAG stringByExpandingTildeInPath]]) {
         return YES;
     }
-    filename = [filename stringWithEscapedShellCharacters];
     if (filename) {
         // Verify whether filename is a script or a folder
         BOOL isDir;
         [[NSFileManager defaultManager] fileExistsAtPath:filename isDirectory:&isDir];
         if (!isDir) {
-            NSString *aString = [NSString stringWithFormat:@"%@; exit;\n", filename];
-            [[iTermController sharedInstance] launchBookmark:nil inTerminal:nil];
+            NSString *aString = [NSString stringWithFormat:@"%@; exit;\n", [filename stringWithEscapedShellCharacters]];
+            [[iTermController sharedInstance] launchBookmark:nil inTerminal:[self terminalToOpenFileIn]];
             // Sleeping a while waiting for the login.
             sleep(1);
             [[[[iTermController sharedInstance] currentTerminal] currentSession] insertText:aString];
-        }
-        else {
-            NSString *aString = [NSString stringWithFormat:@"cd %@\n", filename];
-            [[iTermController sharedInstance] launchBookmark:nil inTerminal:nil];
+        } else {
+            NSString *aString = [NSString stringWithFormat:@"cd %@\n", [filename stringWithEscapedShellCharacters]];
+            [[iTermController sharedInstance] launchBookmark:nil inTerminal:[self terminalToOpenFileIn]];
             // Sleeping a while waiting for the login.
             sleep(1);
             [[[[iTermController sharedInstance] currentTerminal] currentSession] insertText:aString];
@@ -469,12 +515,20 @@ static BOOL hasBecomeActive = NO;
     return YES;
 }
 
+- (void)userDidInteractWithASession
+{
+    userHasInteractedWithAnySession_ = YES;
+}
+
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)app
 {
-    NSNumber* pref = [[NSUserDefaults standardUserDefaults] objectForKey:@"MinRunningTime"];
-    const double kMinRunningTime =  pref ? [pref floatValue] : 10;
-    if ([[NSDate date] timeIntervalSinceDate:launchTime_] < kMinRunningTime) {
-        return NO;
+    if (!userHasInteractedWithAnySession_) {
+        NSNumber* pref = [[NSUserDefaults standardUserDefaults] objectForKey:@"MinRunningTime"];
+        const double kMinRunningTime =  pref ? [pref floatValue] : 10;
+        if ([[NSDate date] timeIntervalSinceDate:launchTime_] < kMinRunningTime) {
+            NSLog(@"Not quitting iTerm2 because it ran very briefly and had no user interaction. Set the MinRunningTime float preference to 0 to turn this feature off.");
+            return NO;
+        }
     }
     quittingBecauseLastWindowClosed_ = [[PreferencePanel sharedInstance] quitWhenAllWindowsClosed];
     return quittingBecauseLastWindowClosed_;
@@ -486,20 +540,20 @@ static BOOL hasBecomeActive = NO;
     if ([prefPanel hotkey] &&
         [prefPanel hotkeyTogglesWindow]) {
         // The hotkey window is configured.
-        PseudoTerminal* hotkeyTerm = [[iTermController sharedInstance] hotKeyWindow];
+        PseudoTerminal* hotkeyTerm = [[HotkeyWindowController sharedInstance] hotKeyWindow];
         if (hotkeyTerm) {
             // Hide the existing window or open it if enabled by preference.
             if ([[hotkeyTerm window] alphaValue] == 1) {
-                [[iTermController sharedInstance] hideHotKeyWindow:hotkeyTerm];
+                [[HotkeyWindowController sharedInstance] hideHotKeyWindow:hotkeyTerm];
                 return NO;
             } else if ([prefPanel dockIconTogglesWindow]) {
-                [[iTermController sharedInstance] showHotKeyWindow];
+                [[HotkeyWindowController sharedInstance] showHotKeyWindow];
                 return NO;
             }
         } else if ([prefPanel dockIconTogglesWindow]) {
             // No existing hotkey window but preference is to toggle it by dock icon so open a new
             // one.
-            [[iTermController sharedInstance] showHotKeyWindow];
+            [[HotkeyWindowController sharedInstance] showHotKeyWindow];
             return NO;
         }
     }
@@ -508,6 +562,19 @@ static BOOL hasBecomeActive = NO;
 
 - (void)applicationDidChangeScreenParameters:(NSNotification *)aNotification
 {
+    // The screens' -visibleFrame is not updated when this is called. Doing a delayed perform with
+    // a delay of 0 is usually, but not always enough. Not that 1 second is always enough either,
+    // I suppose, but I don't want to die on this hill.
+    NSNumber *delay = [[NSUserDefaults standardUserDefaults] objectForKey:@"UpdateScreenParamsDelay"];
+    if (!delay) {
+        delay = [NSNumber numberWithInt:1];
+    }
+    [self performSelector:@selector(updateScreenParametersInAllTerminals)
+               withObject:nil
+               afterDelay:[delay intValue]];
+}
+
+- (void)updateScreenParametersInAllTerminals {
     // Make sure that all top-of-screen windows are the proper width.
     for (PseudoTerminal* term in [self terminals]) {
         [term screenParametersDidChange];
@@ -720,16 +787,20 @@ static BOOL hasBecomeActive = NO;
         return;
     }
     id bm = [[PreferencePanel sharedInstance] handlerBookmarkForURL:urlType];
+    if (!bm) {
+        bm = [[ProfileModel sharedInstance] defaultBookmark];
+    }
     if (bm) {
         PseudoTerminal *term = [[iTermController sharedInstance] currentTerminal];
         [[iTermController sharedInstance] launchBookmark:bm
                                               inTerminal:term
                                                  withURL:urlStr
-                                           forObjectType:term ? iTermTabObject : iTermWindowObject];
+                                                isHotkey:NO
+                                                 makeKey:NO];
     }
 }
 
-- (void) dealloc
+- (void)dealloc
 {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 
@@ -744,7 +815,7 @@ static BOOL hasBecomeActive = NO;
 
 - (IBAction)newWindow:(id)sender
 {
-    [[iTermController sharedInstance] newWindow:sender];
+    [[iTermController sharedInstance] newWindow:sender possiblyTmux:YES];
 }
 
 - (IBAction)newSessionWithSameProfile:(id)sender
@@ -754,16 +825,17 @@ static BOOL hasBecomeActive = NO;
 
 - (IBAction)newSession:(id)sender
 {
-    [[iTermController sharedInstance] newSession:sender];
+    DLog(@"iTermApplicationDelegate newSession:");
+    [[iTermController sharedInstance] newSession:sender possiblyTmux:YES];
 }
 
 // navigation
-- (IBAction) previousTerminal: (id) sender
+- (IBAction)previousTerminal:(id)sender
 {
     [[iTermController sharedInstance] previousTerminal:sender];
 }
 
-- (IBAction) nextTerminal: (id) sender
+- (IBAction)nextTerminal:(id)sender
 {
     [[iTermController sharedInstance] nextTerminal:sender];
 }
@@ -873,30 +945,98 @@ static BOOL hasBecomeActive = NO;
 }
 
 // font control
-- (IBAction) biggerFont: (id) sender
+- (IBAction)biggerFont: (id) sender
 {
     [[[[iTermController sharedInstance] currentTerminal] currentSession] changeFontSizeDirection:1];
 }
 
-- (IBAction) smallerFont: (id) sender
+- (IBAction)smallerFont: (id) sender
 {
     [[[[iTermController sharedInstance] currentTerminal] currentSession] changeFontSizeDirection:-1];
 }
 
-
-
-static void SwapDebugLog() {
-        NSMutableString* temp;
-        temp = gDebugLogStr;
-        gDebugLogStr = gDebugLogStr2;
-        gDebugLogStr2 = temp;
+- (NSString *)formatBytes:(double)bytes
+{
+    if (bytes < 1) {
+        return [NSString stringWithFormat:@"%.04lf bytes", bytes];
+    } else if (bytes < 1024) {
+        return [NSString stringWithFormat:@"%d bytes", (int)bytes];
+    } else if (bytes < 10240) {
+        return [NSString stringWithFormat:@"%.1lf kB", bytes / 10];
+    } else if (bytes < 1048576) {
+        return [NSString stringWithFormat:@"%d kB", (int)bytes / 1024];
+    } else if (bytes < 10485760) {
+        return [NSString stringWithFormat:@"%.1lf MB", bytes / 1048576];
+    } else if (bytes < 1024.0 * 1024.0 * 1024.0) {
+        return [NSString stringWithFormat:@"%.0lf MB", bytes / 1048576];
+    } else if (bytes < 1024.0 * 1024.0 * 1024.0 * 10) {
+        return [NSString stringWithFormat:@"%.1lf GB", bytes / (1024.0 * 1024.0 * 1024.0)];
+    } else {
+        return [NSString stringWithFormat:@"%.0lf GB", bytes / (1024.0 * 1024.0 * 1024.0)];
+    }
 }
 
-static void FlushDebugLog() {
-        NSData* data = [gDebugLogStr dataUsingEncoding:NSUTF8StringEncoding];
-        int written = write(gDebugLogFile, [data bytes], [data length]);
-        assert(written == [data length]);
-        [gDebugLogStr setString:@""];
+- (void)changePasteSpeedBy:(double)factor
+                  bytesKey:(NSString *)bytesKey
+              defaultBytes:(int)defaultBytes
+                  delayKey:(NSString *)delayKey
+              defaultDelay:(float)defaultDelay
+{
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    int bytes = [defaults integerForKey:bytesKey];
+    if (!bytes) {
+        bytes = defaultBytes;
+    }
+    float delay = [defaults floatForKey:delayKey];
+    if (!delay) {
+        delay = defaultDelay;
+    }
+    bytes *= factor;
+    delay /= factor;
+    bytes = MAX(1, MIN(1024 * 1024, bytes));
+    delay = MAX(0.001, MIN(10, delay));
+    [defaults setInteger:bytes forKey:bytesKey];
+    [defaults setFloat:delay forKey:delayKey];
+    double rate = bytes;
+    rate /= delay;
+    
+    [ToastWindowController showToastWithMessage:[NSString stringWithFormat:@"Pasting at up to %@/sec", [self formatBytes:rate]]];
+}
+
+- (IBAction)pasteFaster:(id)sender
+{
+    [self changePasteSpeedBy:1.5
+                    bytesKey:@"QuickPasteBytesPerCall"
+                defaultBytes:1024
+                    delayKey:@"QuickPasteDelayBetweenCalls"
+                defaultDelay:.01];
+}
+
+- (IBAction)pasteSlower:(id)sender
+{
+    [self changePasteSpeedBy:0.66
+                    bytesKey:@"QuickPasteBytesPerCall"
+                defaultBytes:1024
+                    delayKey:@"QuickPasteDelayBetweenCalls"
+                defaultDelay:.01];
+}
+
+- (IBAction)pasteSlowlyFaster:(id)sender
+{
+    [self changePasteSpeedBy:1.5
+                    bytesKey:@"SlowPasteBytesPerCall"
+                defaultBytes:16
+                    delayKey:@"SlowPasteDelayBetweenCalls"
+                defaultDelay:0.125];
+}
+
+- (IBAction)pasteSlowlySlower:(id)sender
+{
+    [self changePasteSpeedBy:0.66
+                    bytesKey:@"SlowPasteBytesPerCall"
+                defaultBytes:16
+                    delayKey:@"SlowPasteDelayBetweenCalls"
+                defaultDelay:0.125];
 }
 
 - (IBAction)maximizePane:(id)sender
@@ -928,7 +1068,7 @@ static void FlushDebugLog() {
     }
 
     // Set the state of the control to the new true state.
-    [secureInput setState:IsSecureEventInputEnabled() ? NSOnState : NSOffState];
+    [secureInput setState:(secureInputDesired_ && IsSecureEventInputEnabled()) ? NSOnState : NSOffState];
 
     // Save the preference, independent of whether it succeeded or not.
     [[NSUserDefaults standardUserDefaults] setObject:[NSNumber numberWithBool:secureInputDesired_]
@@ -944,7 +1084,7 @@ static void FlushDebugLog() {
         }
     }
     // Set the state of the control to the new true state.
-    [secureInput setState:IsSecureEventInputEnabled() ? NSOnState : NSOffState];
+    [secureInput setState:(secureInputDesired_ && IsSecureEventInputEnabled()) ? NSOnState : NSOffState];
 }
 
 - (void)applicationDidResignActive:(NSNotification *)aNotification
@@ -955,51 +1095,16 @@ static void FlushDebugLog() {
         }
     }
     // Set the state of the control to the new true state.
-    [secureInput setState:IsSecureEventInputEnabled() ? NSOnState : NSOffState];
+    [secureInput setState:(secureInputDesired_ && IsSecureEventInputEnabled()) ? NSOnState : NSOffState];
 }
 
 // Debug logging
--(IBAction)debugLogging:(id)sender
+- (IBAction)debugLogging:(id)sender
 {
-        if (!gDebugLogging) {
-                NSRunAlertPanel(@"Debug Logging Enabled",
-                                                @"Writing to /tmp/debuglog.txt",
-                                                @"OK", nil, nil);
-                gDebugLogFile = open("/tmp/debuglog.txt", O_TRUNC | O_CREAT | O_WRONLY, S_IRUSR | S_IWUSR);
-                gDebugLogStr = [[NSMutableString alloc] init];
-                gDebugLogStr2 = [[NSMutableString alloc] init];
-                gDebugLogging = !gDebugLogging;
-        } else {
-                gDebugLogging = !gDebugLogging;
-                SwapDebugLog();
-                FlushDebugLog();
-                SwapDebugLog();
-                FlushDebugLog();
-
-                close(gDebugLogFile);
-                gDebugLogFile=-1;
-                NSRunAlertPanel(@"Debug Logging Stopped",
-                                                @"Please compress and send /tmp/debuglog.txt to the developers.",
-                                                @"OK", nil, nil);
-                [gDebugLogStr release];
-                [gDebugLogStr2 release];
-        }
+  ToggleDebugLogging();
 }
 
-void DebugLog(NSString* value)
-{
-        if (gDebugLogging) {
-                [gDebugLogStr appendString:value];
-                [gDebugLogStr appendString:@"\n"];
-                if ([gDebugLogStr length] > 100000000) {
-                        SwapDebugLog();
-                        [gDebugLogStr2 setString:@""];
-                }
-        }
-}
-
-/// About window
-
+// About window
 - (NSAttributedString *)_linkTo:(NSString *)urlString title:(NSString *)title
 {
     NSDictionary *linkAttributes = [NSDictionary dictionaryWithObject:[NSURL URLWithString:urlString]
@@ -1050,24 +1155,14 @@ void DebugLog(NSString* value)
 - (IBAction)returnToDefaultSize:(id)sender
 {
     PseudoTerminal *frontTerminal = [[iTermController sharedInstance] currentTerminal];
-    PTYTab* theTab = [frontTerminal currentTab];
-    PTYSession* aSession = [theTab activeSession];
-
-    NSDictionary *abEntry = [aSession originalAddressBookEntry];
-
-    NSString* fontDesc = [abEntry objectForKey:KEY_NORMAL_FONT];
-    NSFont* font = [ITAddressBookMgr fontWithDesc:fontDesc];
-    NSFont* nafont = [ITAddressBookMgr fontWithDesc:[abEntry objectForKey:KEY_NON_ASCII_FONT]];
-    float hs = [[abEntry objectForKey:KEY_HORIZONTAL_SPACING] floatValue];
-    float vs = [[abEntry objectForKey:KEY_VERTICAL_SPACING] floatValue];
-    PTYSession* session = [frontTerminal currentSession];
-    PTYTextView* textview = [session TEXTVIEW];
-    [textview setFont:font nafont:nafont horizontalSpacing:hs verticalSpacing:vs];
-        if ([sender isAlternate]) {
-                [frontTerminal sessionInitiatedResize:session
-                                                                                width:[[abEntry objectForKey:KEY_COLUMNS] intValue]
-                                                                           height:[[abEntry objectForKey:KEY_ROWS] intValue]];
-        }
+    PTYSession *session = [frontTerminal currentSession];
+    [session changeFontSizeDirection:0];
+    if ([sender isAlternate]) {
+        NSDictionary *abEntry = [session originalAddressBookEntry];
+        [frontTerminal sessionInitiatedResize:session
+                                        width:[[abEntry objectForKey:KEY_COLUMNS] intValue]
+                                       height:[[abEntry objectForKey:KEY_ROWS] intValue]];
+    }
 }
 
 - (IBAction)exposeForTabs:(id)sender
@@ -1293,7 +1388,7 @@ void DebugLog(NSString* value)
     [scriptIcon setSize: NSMakeSize(16, 16)];
 
     // create menu item with no title and set image
-    NSMenuItem *scriptMenuItem = [[NSMenuItem alloc] initWithTitle: @"" action: nil keyEquivalent: @""];
+    NSMenuItem *scriptMenuItem = [[[NSMenuItem alloc] initWithTitle: @"" action: nil keyEquivalent: @""] autorelease];
     [scriptMenuItem setImage: scriptIcon];
 
     // create submenu
@@ -1339,7 +1434,6 @@ void DebugLog(NSString* value)
     // add new menu item
     if (count) {
         [[NSApp mainMenu] insertItem:scriptMenuItem atIndex:5];
-        [scriptMenuItem release];
         [scriptMenuItem setTitle:NSLocalizedStringFromTableInBundle(@"Script",
                                                                     @"iTerm",
                                                                     [NSBundle bundleForClass:[iTermController class]],

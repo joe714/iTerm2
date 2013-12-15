@@ -44,11 +44,10 @@
     BOOL isModifierPressed;
     BOOL wereTabsNavigatedWithMRU;
     NSMutableArray* mruTabs;
+    // Modifiers that are being used for cycling tabs. Only valid if
+    // isModifierPressed is true.
+    NSUInteger tabMRUModifierMask_;
 }
-
-// Class methods that Apple should have provided
-+ (NSSize)contentSizeForFrameSize:(NSSize)frameSize tabViewType:(NSTabViewType)type controlSize:(NSControlSize)controlSize;
-+ (NSSize)frameSizeForContentSize:(NSSize)contentSize tabViewType:(NSTabViewType)type controlSize:(NSControlSize)controlSize;
 
 - (id)initWithFrame:(NSRect)aFrame;
 - (void)dealloc;

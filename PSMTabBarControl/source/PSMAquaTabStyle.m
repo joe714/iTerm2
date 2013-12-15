@@ -13,6 +13,54 @@
 #define kPSMAquaObjectCounterRadius 7.0
 #define kPSMAquaCounterMinWidth 20
 
+@interface NSColor (CGColorAdditions)
+/**
+ Return CGColor representation of the NSColor in the RGB color space
+ It has a silly name because OS 10.8 defines -[NSColor CGColor].
+ */
+@property (readonly) CGColorRef PSMCGColor;
+@end
+
+@implementation NSColor (CGColorAdditions)
+
+- (CGColorRef)PSMCGColor
+{
+  NSColor *colorRGB = [self colorUsingColorSpaceName:NSCalibratedRGBColorSpace];
+  CGFloat components[4];
+  [colorRGB getRed:&components[0] green:&components[1] blue:&components[2] alpha:&components[3]];
+  CGColorSpaceRef theColorSpace = CGColorSpaceCreateWithName(kCGColorSpaceGenericRGB);
+  CGColorRef theColor = CGColorCreate(theColorSpace, components);
+  CGColorSpaceRelease(theColorSpace);
+  return (CGColorRef)[(id)theColor autorelease];
+}
+
+@end
+
+static CGImageRef CGImageCreateWithNSImage(NSImage *image, CGRect sourceRect) {
+  NSSize imageSize = [image size];
+
+  CGContextRef bitmapContext = CGBitmapContextCreate(NULL,
+                                                     imageSize.width,
+                                                     imageSize.height,
+                                                     8,
+                                                     0,
+                                                     [[NSColorSpace genericRGBColorSpace] CGColorSpace],
+                                                     kCGBitmapByteOrder32Host | kCGImageAlphaPremultipliedFirst);
+
+  [NSGraphicsContext saveGraphicsState];
+  [NSGraphicsContext setCurrentContext:[NSGraphicsContext graphicsContextWithGraphicsPort:bitmapContext
+                                                                                  flipped:NO]];
+  [image drawInRect:NSMakeRect(0, 0, imageSize.width, imageSize.height)
+           fromRect:NSRectFromCGRect(sourceRect)
+          operation:NSCompositeCopy
+           fraction:1.0];
+  [NSGraphicsContext restoreGraphicsState];
+
+  CGImageRef cgImage = CGBitmapContextCreateImage(bitmapContext);
+  CGContextRelease(bitmapContext);
+  return cgImage;
+}
+
 @implementation PSMAquaTabStyle
 
 - (NSString *)name
@@ -62,9 +110,9 @@
     aquaDivider = [[NSImage alloc] initByReferencingFile:[[PSMTabBarControl bundle] pathForImageResource:@"AquaTabsSeparator"]];
     [aquaDivider setFlipped:NO];
 
-    aquaCloseButton = [[NSImage alloc] initByReferencingFile:[[PSMTabBarControl bundle] pathForImageResource:@"AquaTabClose_Front"]];
-    aquaCloseButtonDown = [[NSImage alloc] initByReferencingFile:[[PSMTabBarControl bundle] pathForImageResource:@"AquaTabClose_Front_Pressed"]];
-    aquaCloseButtonOver = [[NSImage alloc] initByReferencingFile:[[PSMTabBarControl bundle] pathForImageResource:@"AquaTabClose_Front_Rollover"]];
+    aquaCloseButton = [[NSImage imageNamed:@"AquaTabClose_Front"] retain];
+    aquaCloseButtonDown = [[NSImage imageNamed:@"AquaTabClose_Front_Pressed"] retain];
+    aquaCloseButtonOver = [[NSImage imageNamed:@"AquaTabClose_Front_Rollover"] retain];
 
     _addTabButtonImage = [[NSImage alloc] initByReferencingFile:[[PSMTabBarControl bundle] pathForImageResource:@"AquaTabNew"]];
     _addTabButtonPressedImage = [[NSImage alloc] initByReferencingFile:[[PSMTabBarControl bundle] pathForImageResource:@"AquaTabNewPressed"]];
@@ -285,7 +333,13 @@
 #else
     NSString *contents = [NSString stringWithFormat:@"%d", [cell count]];
 #endif
-    contents = [NSString stringWithFormat:@"%@%@", [cell modifierString], contents];
+    if ([cell count] < 9) {
+        contents = [NSString stringWithFormat:@"%@%@", [cell modifierString], contents];
+    } else if ([cell isLast]) {
+        contents = [NSString stringWithFormat:@"%@9", [cell modifierString]];
+    } else {
+        contents = @"";
+    }
     attrStr = [[[NSMutableAttributedString alloc] initWithString:contents] autorelease];
     NSRange range = NSMakeRange(0, [contents length]);
 
@@ -320,9 +374,40 @@
 #pragma mark -
 #pragma mark Drawing
 
+- (void)drawBackgroundImage:(NSImage *)bgImage
+            tintedWithColor:(NSColor *)tabColor
+                     inRect:(NSRect)cellFrame
+{
+  [NSGraphicsContext saveGraphicsState];
+  CGContextRef context = [[NSGraphicsContext currentContext] graphicsPort];
+  if (tabColor) {
+    CGContextSetBlendMode(context, kCGBlendModeNormal);
+    CGContextSetFillColorWithColor(context, [tabColor PSMCGColor]);
+    CGContextFillRect(context, NSRectToCGRect(NSMakeRect(cellFrame.origin.x + 0.5,
+                                          cellFrame.origin.y + 0.5,
+                                          cellFrame.size.width,
+                                          cellFrame.size.height)));
+
+    CGImageRef cgBgImage = CGImageCreateWithNSImage(bgImage, CGRectMake(0, 0, 1, 22));
+    CGContextSetBlendMode(context, kCGBlendModeLuminosity);
+    CGContextSetAlpha(context, 0.7);
+    CGContextDrawImage(context, NSRectToCGRect(cellFrame), cgBgImage);
+    CFRelease(cgBgImage);
+  } else {
+    [bgImage drawInRect:cellFrame
+               fromRect:NSMakeRect(0.0, 0.0, 1.0, 22.0)
+              operation:NSCompositeSourceOver
+               fraction:1.0];
+  }
+  [NSGraphicsContext restoreGraphicsState];
+}
+
 - (void)drawTabCell:(PSMTabBarCell *)cell;
 {
     NSRect cellFrame = [cell frame];
+
+    NSImage *bgImage = aquaTabBg;
+    NSColor* tabColor = [cell tabColor];
 
     // Selected Tab
     if ([cell state] == NSOnState) {
@@ -339,7 +424,6 @@
         if (![[[cell controlView] window] isKeyWindow])
             currentTint = NSClearControlTint;
 
-        NSImage *bgImage;
         switch(currentTint){
             case NSGraphiteControlTint:
                 bgImage = aquaTabBgDownGraphite;
@@ -353,7 +437,7 @@
                 break;
         }
 
-        [bgImage drawInRect:cellFrame fromRect:NSMakeRect(0.0, 0.0, 1.0, 22.0) operation:NSCompositeSourceOver fraction:1.0];
+        [self drawBackgroundImage:bgImage tintedWithColor:tabColor inRect:cellFrame];
         [aquaDivider compositeToPoint:NSMakePoint(cellFrame.origin.x + cellFrame.size.width - 1.0, cellFrame.origin.y + cellFrame.size.height) operation:NSCompositeSourceOver];
 
         aRect.size.height+=0.5;
@@ -368,6 +452,10 @@
         aRect.origin.x -= 1;
         aRect.size.width += 1;
 
+        if (tabColor) {
+            [self drawBackgroundImage:bgImage tintedWithColor:tabColor inRect:cellFrame];
+        }
+
         // Rollover
         if ([cell isHighlighted]) {
             [[NSColor colorWithCalibratedWhite:0.0 alpha:0.1] set];
@@ -375,19 +463,6 @@
         }
 
         [aquaDivider compositeToPoint:NSMakePoint(cellFrame.origin.x + cellFrame.size.width - 1.0, cellFrame.origin.y + cellFrame.size.height) operation:NSCompositeSourceOver];
-    }
-    NSColor* tabColor = [cell tabColor];
-    if (tabColor) {
-        if ([cell state] == NSOnState) {
-            [[tabColor colorWithAlphaComponent:0.5] set];
-        } else {
-            [tabColor set];
-        }
-        NSRectFillUsingOperation(NSMakeRect(cellFrame.origin.x + 0.5,
-                                            cellFrame.origin.y + 0.5,
-                                            cellFrame.size.width,
-                                            cellFrame.size.height),
-                                 NSCompositeSourceOver);
     }
     [self drawInteriorWithTabCell:cell inView:[cell controlView]];
 }

@@ -27,12 +27,18 @@
 
 #import <Cocoa/Cocoa.h>
 
+@protocol TrouterDelegate
+- (void)trouterLaunchCoprocessWithCommand:(NSString *)command;
+@end
+
 @interface Trouter : NSObject {
     NSDictionary *prefs_;
     NSFileManager *fileManager;
+	id<TrouterDelegate> delegate_;
 }
 
 @property (nonatomic, copy) NSDictionary *prefs;
+@property (nonatomic, assign) id<TrouterDelegate> delegate;
 
 - (Trouter*)init;
 - (void)dealloc;
@@ -44,6 +50,7 @@
          workingDirectory:(NSString *)workingDirectory
                lineNumber:(NSString **)lineNumber;
 - (BOOL)openFileInEditor:(NSString *) path lineNumber:(NSString *)lineNumber;
+- (BOOL)canOpenPath:(NSString *)path workingDirectory:(NSString *)workingDirectory;
 - (BOOL)openPath:(NSString *)path
     workingDirectory:(NSString *)workingDirectory
     prefix:(NSString *)prefix

@@ -32,9 +32,9 @@
 {
     if((self = [super init]))
     {
-        unifiedCloseButton = [[NSImage alloc] initByReferencingFile:[[PSMTabBarControl bundle] pathForImageResource:@"AquaTabClose_Front"]];
-        unifiedCloseButtonDown = [[NSImage alloc] initByReferencingFile:[[PSMTabBarControl bundle] pathForImageResource:@"AquaTabClose_Front_Pressed"]];
-        unifiedCloseButtonOver = [[NSImage alloc] initByReferencingFile:[[PSMTabBarControl bundle] pathForImageResource:@"AquaTabClose_Front_Rollover"]];
+        unifiedCloseButton = [[NSImage imageNamed:@"AquaTabClose_Front"] retain];
+        unifiedCloseButtonDown = [[NSImage imageNamed:@"AquaTabClose_Front_Pressed"] retain];
+        unifiedCloseButtonOver = [[NSImage imageNamed:@"AquaTabClose_Front_Rollover"] retain];
 
         _addTabButtonImage = [[NSImage alloc] initByReferencingFile:[[PSMTabBarControl bundle] pathForImageResource:@"AquaTabNew"]];
         _addTabButtonPressedImage = [[NSImage alloc] initByReferencingFile:[[PSMTabBarControl bundle] pathForImageResource:@"AquaTabNewPressed"]];
@@ -263,7 +263,13 @@
 #else
     NSString *contents = [NSString stringWithFormat:@"%d", [cell count]];
 #endif
-    contents = [NSString stringWithFormat:@"%@%@", [cell modifierString], contents];
+    if ([cell count] < 9) {
+        contents = [NSString stringWithFormat:@"%@%@", [cell modifierString], contents];
+    } else if ([cell isLast]) {
+        contents = [NSString stringWithFormat:@"%@9", [cell modifierString]];
+    } else {
+        contents = @"";
+    }
     attrStr = [[[NSMutableAttributedString alloc] initWithString:contents] autorelease];
     NSRange range = NSMakeRange(0, [contents length]);
 
@@ -297,6 +303,18 @@
 #pragma mark -
 #pragma mark ---- drawing ----
 
+- (void)overlayTabColor:(NSColor *)tabColor
+                inFrame:(NSRect)cellFrame
+                  alpha:(CGFloat)alpha
+{
+  [[tabColor colorWithAlphaComponent:alpha] set];
+  NSRectFillUsingOperation(NSMakeRect(cellFrame.origin.x + 0.5,
+                                      cellFrame.origin.y + 0.5,
+                                      cellFrame.size.width,
+                                      cellFrame.size.height),
+                           NSCompositeSourceOver);
+}
+
 - (void)drawTabCell:(PSMTabBarCell *)cell
 {
     NSRect cellFrame = [cell frame];
@@ -311,6 +329,7 @@
     NSColor * lineColor = nil;
     NSBezierPath* bezier = [NSBezierPath bezierPath];
     lineColor = [NSColor colorWithCalibratedWhite:0.576 alpha:1.0];
+    NSColor* tabColor = [cell tabColor];
 
     if (!showsBaselineSeparator || [cell state] == NSOnState)
     {
@@ -366,6 +385,9 @@
                                                 endColor:[NSColor colorWithCalibratedWhite:0.843 alpha:1.0]];
             }
         }
+        if (tabColor) {
+          [self overlayTabColor:tabColor inFrame:cellFrame alpha:([cell state] == NSOnState) ? 1.0 : 0.3];
+        }
 
         [lineColor set];
         [bezier stroke];
@@ -386,6 +408,9 @@
         {
             [[NSColor colorWithCalibratedWhite:0.0 alpha:0.1] set];
             NSRectFillUsingOperation(aRect, NSCompositeSourceAtop);
+        }
+        if (tabColor) {
+          [self overlayTabColor:tabColor inFrame:cellFrame alpha:([cell state] == NSOnState) ? 1.0 : 0.3];
         }
 
         // frame
@@ -417,19 +442,6 @@
         }
     }
 
-    NSColor* tabColor = [cell tabColor];
-    if (tabColor) {
-        if ([cell state] == NSOnState) {
-            [[tabColor colorWithAlphaComponent:0.5] set];
-        } else {
-            [tabColor set];
-        }
-        NSRectFillUsingOperation(NSMakeRect(cellFrame.origin.x + 0.5,
-                                            cellFrame.origin.y + 0.5,
-                                            cellFrame.size.width,
-                                            cellFrame.size.height),
-                                 NSCompositeSourceOver);
-    }
     [self drawInteriorWithTabCell:cell inView:[cell controlView]];
 }
 
@@ -566,7 +578,7 @@
         [attrStr addAttribute:NSFontAttributeName value:[NSFont systemFontOfSize:11.0] range:range];
         NSMutableParagraphStyle *centeredParagraphStyle = nil;
         if (!centeredParagraphStyle) {
-            centeredParagraphStyle = [[[NSParagraphStyle defaultParagraphStyle] mutableCopy] retain];
+            centeredParagraphStyle = [[[NSParagraphStyle defaultParagraphStyle] mutableCopy] autorelease];
             [centeredParagraphStyle setAlignment:NSCenterTextAlignment];
         }
         [attrStr addAttribute:NSParagraphStyleAttributeName value:centeredParagraphStyle range:range];

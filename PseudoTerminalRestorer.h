@@ -8,11 +8,11 @@
 
 #import <Cocoa/Cocoa.h>
 
-
 @interface PseudoTerminalRestorer : NSObject {
 
 }
 
 + (void)restoreWindowWithIdentifier:(NSString *)identifier state:(NSCoder *)state completionHandler:(void (^)(NSWindow *, NSError *))completionHandler;
 
++ (BOOL)willOpenWindows;
 @end

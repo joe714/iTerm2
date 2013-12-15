@@ -29,7 +29,9 @@
 
     // accessors
 - (NSEvent *)lastMouseDownEvent;
+- (NSEvent *)lastMiddleMouseDownEvent;
 - (void)setLastMouseDownEvent:(NSEvent *)event;
+- (void)setLastMiddleMouseDownEvent:(NSEvent *)event;
 
     // contents
 - (void)addTabViewItem:(NSTabViewItem *)item;
@@ -132,6 +134,7 @@
     if(_overflowPopUpButton){
         // configure
         [_overflowPopUpButton setAutoresizingMask:NSViewNotSizable|NSViewMinXMargin];
+        [[_overflowPopUpButton cell] accessibilitySetOverrideValue:NSLocalizedStringFromTableInBundle(@"More tabs", @"iTerm", [NSBundle bundleForClass:[self class]], @"VoiceOver label for the button displaying menu of additional overflown tabs on click") forAttribute:NSAccessibilityDescriptionAttribute];
     }
 
     // new tab button
@@ -203,6 +206,7 @@
     [_addTabButton release];
     [partnerView release];
     [_lastMouseDownEvent release];
+    [_lastMiddleMouseDownEvent release];
     [style release];
 
     [self unregisterDraggedTypes];
@@ -242,6 +246,18 @@
     [event retain];
     [_lastMouseDownEvent release];
     _lastMouseDownEvent = event;
+}
+
+- (NSEvent *)lastMiddleMouseDownEvent
+{
+    return _lastMiddleMouseDownEvent;
+}
+
+- (void)setLastMiddleMouseDownEvent:(NSEvent *)event
+{
+    [event retain];
+    [_lastMiddleMouseDownEvent release];
+    _lastMiddleMouseDownEvent = event;
 }
 
 - (id)delegate
@@ -839,6 +855,10 @@
 
 - (void)drawRect:(NSRect)rect
 {
+    for (PSMTabBarCell *cell in [self cells]) {
+        [cell setIsLast:NO];
+    }
+    [[[self cells] lastObject] setIsLast:YES];
     [style drawTabBar:self inRect:rect];
 }
 
@@ -846,8 +866,7 @@
 {
     NSTabViewItem *theItem = [tabView tabViewItemAtIndex:sourceIndex];
     BOOL reselect = ([tabView selectedTabViewItem] == theItem);
-    [theItem retain];
-    
+
     id tempDelegate = [tabView delegate];
     [tabView setDelegate:nil];
     [theItem retain];
@@ -935,7 +954,6 @@
                 if (!_useOverflowMenu) {
                     int j, averageWidth = (availableWidth / cellCount);
 
-                    numberOfVisibleCells = cellCount;
                     [newWidths removeAllObjects];
 
                     for (j = 0; j < cellCount; j++) {
@@ -1020,8 +1038,6 @@
                         if (totalOccupiedWidth < availableWidth) {
                             [newWidths replaceObjectAtIndex:0 withObject:[NSNumber numberWithFloat:availableWidth - [cellWidth floatValue]]];
                         }
-
-                        numberOfVisibleCells = 2;
                     }
 
                     break; // done assigning widths; remaining cells go in overflow menu
@@ -1373,6 +1389,12 @@
     return YES;
 }
 
+- (void)otherMouseDown:(NSEvent *)theEvent {
+    if ([theEvent buttonNumber] == 2) {
+        [self setLastMiddleMouseDownEvent:theEvent];
+    }
+}
+
 - (void)mouseDown:(NSEvent *)theEvent
 {
     _didDrag = NO;
@@ -1469,6 +1491,22 @@
                 [[self delegate] tabView:tabView shouldDragTabViewItem:[cell representedObject] fromTabBar:self]) {
             _didDrag = YES;
             [[PSMTabDragAssistant sharedDragAssistant] startDraggingCell:cell fromTabBar:self withMouseDownEvent:[self lastMouseDownEvent]];
+        }
+    }
+}
+
+- (void)otherMouseUp:(NSEvent *)theEvent
+{
+    // Middle click closes a tab, even if the click is not on the close button.
+    if ([theEvent buttonNumber] == 2 && !_resizing) {
+        NSPoint mousePt = [self convertPoint:[theEvent locationInWindow] fromView:nil];
+        NSRect cellFrame;
+        PSMTabBarCell *cell = [self cellForPoint:mousePt cellFrame:&cellFrame];
+        NSRect mouseDownCellFrame;
+        PSMTabBarCell *mouseDownCell = [self cellForPoint:[self convertPoint:[[self lastMiddleMouseDownEvent] locationInWindow] fromView:nil]
+                                                cellFrame:&mouseDownCellFrame];
+        if (cell && cell == mouseDownCell) {
+            [self closeTabClick:cell];
         }
     }
 }
@@ -1886,6 +1924,7 @@
             [[self delegate] tabView: aTabView didSelectTabViewItem: tabViewItem];
         }
     }
+    NSAccessibilityPostNotification(self, NSAccessibilityValueChangedNotification);
 }
 
 - (void) tabView:(NSTabView *)tabView doubleClickTabViewItem:(NSTabViewItem *)tabViewItem
@@ -2014,6 +2053,7 @@
         [aCoder encodeObject:partnerView forKey:@"PSMpartnerView"];
         [aCoder encodeBool:_awakenedFromNib forKey:@"PSMawakenedFromNib"];
         [aCoder encodeObject:_lastMouseDownEvent forKey:@"PSMlastMouseDownEvent"];
+        [aCoder encodeObject:_lastMiddleMouseDownEvent forKey:@"PSMlastMiddleMouseDownEvent"];
         [aCoder encodeObject:delegate forKey:@"PSMdelegate"];
         [aCoder encodeBool:_useOverflowMenu forKey:@"PSMuseOverflowMenu"];
         [aCoder encodeBool:_automaticallyAnimates forKey:@"PSMautomaticallyAnimates"];
@@ -2049,6 +2089,7 @@
             partnerView = [[aDecoder decodeObjectForKey:@"PSMpartnerView"] retain];
             _awakenedFromNib = [aDecoder decodeBoolForKey:@"PSMawakenedFromNib"];
             _lastMouseDownEvent = [[aDecoder decodeObjectForKey:@"PSMlastMouseDownEvent"] retain];
+            _lastMiddleMouseDownEvent = [[aDecoder decodeObjectForKey:@"PSMlastMiddleMouseDownEvent"] retain];
             _useOverflowMenu = [aDecoder decodeBoolForKey:@"PSMuseOverflowMenu"];
             _automaticallyAnimates = [aDecoder decodeBoolForKey:@"PSMautomaticallyAnimates"];
             delegate = [[aDecoder decodeObjectForKey:@"PSMdelegate"] retain];
@@ -2186,8 +2227,9 @@
 {
     int i, cellCount = [_cells count];
     for(i = 0; i < cellCount; i++){
-        if([[_cells objectAtIndex:i] isInOverflowMenu])
-            return i+1;
+        if ([[_cells objectAtIndex:i] isInOverflowMenu]) {
+            return i;
+        }
     }
     return cellCount;
 }
@@ -2199,12 +2241,45 @@
     return NO;
 }
 
+- (NSArray*)accessibilityAttributeNames
+{
+    static NSArray *attributes = nil;
+    if (!attributes) {
+        NSSet *set = [NSSet setWithArray:[super accessibilityAttributeNames]];
+        set = [set setByAddingObjectsFromArray:[NSArray arrayWithObjects:
+                                                NSAccessibilityTabsAttribute,
+                                                NSAccessibilityValueAttribute,
+                                                nil]];
+        attributes = [[set allObjects] retain];
+    }
+    return attributes;
+}
+
 - (id)accessibilityAttributeValue:(NSString *)attribute {
     id attributeValue = nil;
     if ([attribute isEqualToString: NSAccessibilityRoleAttribute]) {
-        attributeValue = NSAccessibilityGroupRole;
+        attributeValue = NSAccessibilityTabGroupRole;
     } else if ([attribute isEqualToString: NSAccessibilityChildrenAttribute]) {
+        NSMutableArray *children = [NSMutableArray arrayWithArray:[_cells objectsAtIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, [self numberOfVisibleTabs])]]];
+        if (![_overflowPopUpButton isHidden]) {
+            [children addObject:_overflowPopUpButton];
+        }
+        if (![_addTabButton isHidden]) {
+            [children addObject:_addTabButton];
+        }
+        attributeValue = NSAccessibilityUnignoredChildren(children);
+    } else if ([attribute isEqualToString: NSAccessibilityTabsAttribute]) {
         attributeValue = NSAccessibilityUnignoredChildren(_cells);
+    } else if ([attribute isEqualToString:NSAccessibilityValueAttribute]) {
+        NSTabViewItem *tabViewItem = [tabView selectedTabViewItem];
+        for (NSActionCell *cell in _cells) {
+            if ([cell representedObject] == tabViewItem)
+                attributeValue = cell;
+        }
+        if (!attributeValue)
+        {
+            NSLog(@"WARNING: seems no tab cell is currently selected");
+        }
     } else {
         attributeValue = [super accessibilityAttributeValue:attribute];
     }

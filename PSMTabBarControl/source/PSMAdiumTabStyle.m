@@ -36,9 +36,9 @@
 
 - (void)loadImages
 {
-    _closeButton = [[NSImage alloc] initByReferencingFile:[[PSMTabBarControl bundle] pathForImageResource:@"AquaTabClose_Front"]];
-    _closeButtonDown = [[NSImage alloc] initByReferencingFile:[[PSMTabBarControl bundle] pathForImageResource:@"AquaTabClose_Front_Pressed"]];
-    _closeButtonOver = [[NSImage alloc] initByReferencingFile:[[PSMTabBarControl bundle] pathForImageResource:@"AquaTabClose_Front_Rollover"]];
+    _closeButton = [[NSImage imageNamed:@"AquaTabClose_Front"] retain];
+    _closeButtonDown = [[NSImage imageNamed:@"AquaTabClose_Front_Pressed"] retain];
+    _closeButtonOver = [[NSImage imageNamed:@"AquaTabClose_Front_Rollover"] retain];
 
     _addTabButtonImage = [[NSImage alloc] initByReferencingFile:[[PSMTabBarControl bundle] pathForImageResource:@"AquaTabNew"]];
     _addTabButtonPressedImage = [[NSImage alloc] initByReferencingFile:[[PSMTabBarControl bundle] pathForImageResource:@"AquaTabNewPressed"]];
@@ -316,7 +316,13 @@
 #else
     NSString *contents = [NSString stringWithFormat:@"%d", [cell count]];
 #endif
-    contents = [NSString stringWithFormat:@"%@%@", [cell modifierString], contents];
+    if ([cell count] < 9) {
+        contents = [NSString stringWithFormat:@"%@%@", [cell modifierString], contents];
+    } else if ([cell isLast]) {
+        contents = [NSString stringWithFormat:@"%@9", [cell modifierString]];
+    } else {
+        contents = @"";
+    }
     attrStr = [[[NSMutableAttributedString alloc] initWithString:contents] autorelease];
     NSRange range = NSMakeRange(0, [contents length]);
 
@@ -360,7 +366,6 @@
 
     //draw the close button and icon combined
     if ([cell hasCloseButton] && ![cell isCloseButtonSuppressed]) {
-        NSSize closeButtonSize = NSZeroSize;
         NSRect closeButtonRect = [cell closeButtonRectForFrame:cellFrame];
         NSImage *closeButton = nil;
 
@@ -379,7 +384,6 @@
             closeButton = _closeButtonDown;
         }
 
-        closeButtonSize = [closeButton size];
         if ([controlView isFlipped]) {
             closeButtonRect.origin.y += closeButtonRect.size.height;
         }
@@ -448,6 +452,22 @@
     [[cell attributedStringValue] drawInRect:labelRect];
 }
 
+- (void)overlayTabColor:(NSColor *)tabColor inRect:(NSRect)cellFrame cellIsOn:(BOOL)cellIsOn
+{
+    if (tabColor) {
+      if (cellIsOn) {
+          [tabColor set];
+      } else {
+          [[tabColor colorWithAlphaComponent:0.5] set];
+      }
+      NSRectFillUsingOperation(NSMakeRect(cellFrame.origin.x + 0.5,
+                                          cellFrame.origin.y + 0.5,
+                                          cellFrame.size.width,
+                                          cellFrame.size.height),
+                               NSCompositeSourceOver);
+    }
+}
+
 - (void)drawTabCell:(PSMTabBarCell *)cell
 {
     NSRect cellFrame = [cell frame];
@@ -484,6 +504,10 @@
             } else {
                 [_gradientImage drawInRect:NSMakeRect(aRect.origin.x, aRect.origin.y, aRect.size.width, aRect.size.height) fromRect:NSMakeRect(0, 0, [_gradientImage size].width, [_gradientImage size].height) operation:NSCompositeSourceOver fraction:1.0];
             }
+
+            [self overlayTabColor:[cell tabColor]
+                           inRect:NSMakeRect(aRect.origin.x, aRect.origin.y, aRect.size.width, aRect.size.height)
+                         cellIsOn:[cell state] == NSOnState];
 
             // frame
             [lineColor set];
@@ -533,6 +557,10 @@
                 [_gradientImage drawInRect:NSMakeRect(aRect.origin.x, aRect.origin.y, aRect.size.width, aRect.size.height) fromRect:NSMakeRect(0, 0, [_gradientImage size].width, [_gradientImage size].height) operation:NSCompositeSourceOver fraction:1.0];
             }
 
+            [self overlayTabColor:[cell tabColor]
+                           inRect:aRect
+                         cellIsOn:[cell state] == NSOnState];
+
             // frame
             //bottom line
             [lineColor set];
@@ -562,6 +590,10 @@
     } else {
         // unselected tab
         NSRect aRect = NSMakeRect(cellFrame.origin.x, cellFrame.origin.y, cellFrame.size.width, cellFrame.size.height);
+
+        [self overlayTabColor:[cell tabColor]
+                       inRect:aRect
+                     cellIsOn:[cell state] == NSOnState];
 
         // rollover
         if ([cell isHighlighted]) {
@@ -593,19 +625,6 @@
         [bezier stroke];
     }
 
-    NSColor* tabColor = [cell tabColor];
-    if (tabColor) {
-        if ([cell state] == NSOnState) {
-            [[tabColor colorWithAlphaComponent:0.5] set];
-        } else {
-            [tabColor set];
-        }
-        NSRectFillUsingOperation(NSMakeRect(cellFrame.origin.x + 0.5,
-                                            cellFrame.origin.y + 0.5,
-                                            cellFrame.size.width,
-                                            cellFrame.size.height),
-                                 NSCompositeSourceOver);
-    }
     [NSGraphicsContext restoreGraphicsState];
     [theShadow release];
 
@@ -719,7 +738,7 @@
         NSMutableParagraphStyle *centeredParagraphStyle = nil;
 
         if (!centeredParagraphStyle) {
-            centeredParagraphStyle = [[[NSParagraphStyle defaultParagraphStyle] mutableCopy] retain];
+            centeredParagraphStyle = [[[NSParagraphStyle defaultParagraphStyle] mutableCopy] autorelease];
             [centeredParagraphStyle setAlignment:NSCenterTextAlignment];
         }
 

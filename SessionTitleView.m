@@ -11,6 +11,19 @@
 const double kBottomMargin = 0;
 static const CGFloat kButtonSize = 17;
 
+@interface NoFirstResponderButton : NSButton
+@end
+
+@implementation NoFirstResponderButton
+
+// Sometimes the button becomes the first responder for some weird reason.
+// Prevent that from happening. Bug 1924. This is just an experiment to see if it works (4/16/13)
+- (BOOL)acceptsFirstResponder {
+    return NO;
+}
+
+@end
+
 @implementation SessionTitleView
 
 @synthesize title = title_;
@@ -22,10 +35,10 @@ static const CGFloat kButtonSize = 17;
     if (self) {
         const double kMargin = 5;
         double x = kMargin;
-        
-        NSImage *closeImage = [[NSImage alloc] initWithContentsOfFile:[[NSBundle mainBundle] pathForResource:@"closebutton"
-                                                                                                      ofType:@"tif"]];
-        closeButton_ = [[NSButton alloc] initWithFrame:NSMakeRect(x, (frame.size.height - kButtonSize) / 2, kButtonSize, kButtonSize)];
+
+        NSImage *closeImage = [[[NSImage alloc] initWithContentsOfFile:[[NSBundle mainBundle] pathForResource:@"closebutton"
+                                                                                                       ofType:@"tif"]] autorelease];
+        closeButton_ = [[NoFirstResponderButton alloc] initWithFrame:NSMakeRect(x, (frame.size.height - kButtonSize) / 2, kButtonSize, kButtonSize)];
         [closeButton_ setButtonType:NSMomentaryPushInButton];
         [closeButton_ setImage:closeImage];
         [closeButton_ setTarget:self];
@@ -53,7 +66,7 @@ static const CGFloat kButtonSize = 17;
         [menuButton_ addItemWithTitle:@"Foo"];
 
         menuButton_.frame = NSMakeRect(frame.size.width - menuButton_.frame.size.width - kMargin,
-                                       (frame.size.height - menuButton_.frame.size.height) / 2,
+                                       (frame.size.height - menuButton_.frame.size.height) / 2 + 1,
                                        menuButton_.frame.size.width,
                                        menuButton_.frame.size.height);
         [menuButton_ setAutoresizingMask:NSViewMinXMargin];

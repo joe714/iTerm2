@@ -29,23 +29,11 @@
 
 #import <Cocoa/Cocoa.h>
 #import <Carbon/Carbon.h>
-
-//#define GENERAL_VERBOSE_LOGGING
-#ifdef GENERAL_VERBOSE_LOGGING
-#define DLog NSLog
-#else
-#define DLog(args...) \
-do { \
-if (gDebugLogging) { \
-DebugLog([NSString stringWithFormat:args]); \
-} \
-} while (0)
-#endif
+#import "DebugLogging.h"
 
 @class PseudoTerminal;
-extern BOOL gDebugLogging;
 extern NSString *kUseBackgroundPatternIndicatorChangedNotification;
-void DebugLog(NSString* value);
+int DebugLogImpl(const char *file, int line, const char *function, NSString* value);
 
 @interface iTermAboutWindow : NSPanel
 {
@@ -98,6 +86,8 @@ void DebugLog(NSString* value);
 
     // Set to YES when applicationDidFinishLaunching: is called.
     BOOL finishedLaunching_;
+
+    BOOL userHasInteractedWithAnySession_;  // Disables min 10-second running time
 }
 
 - (void)awakeFromNib;
@@ -129,7 +119,6 @@ void DebugLog(NSString* value);
 
 - (IBAction)debugLogging:(id)sender;
 
-- (IBAction)toggleSecureInput:(id)sender;
 - (void)updateMaximizePaneMenuItem;
 - (void)updateUseTransparencyMenuItem;
 
@@ -162,6 +151,12 @@ void DebugLog(NSString* value);
 - (IBAction) biggerFont: (id) sender;
 - (IBAction) smallerFont: (id) sender;
 
+// Paste speed control
+- (IBAction)pasteFaster:(id)sender;
+- (IBAction)pasteSlower:(id)sender;
+- (IBAction)pasteSlowlyFaster:(id)sender;
+- (IBAction)pasteSlowlySlower:(id)sender;
+
 // size
 - (IBAction)returnToDefaultSize:(id)sender;
 - (IBAction)exposeForTabs:(id)sender;
@@ -179,6 +174,9 @@ void DebugLog(NSString* value);
 - (void)updateBroadcastMenuState;
 
 - (BOOL)showToolbelt;
+
+// Call this when the user has any nontrivial interaction with a session, such as typing in it or closing a window.
+- (void)userDidInteractWithASession;
 
 @end
 

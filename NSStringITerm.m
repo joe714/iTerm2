@@ -28,6 +28,7 @@
 
 #define NSSTRINGJTERMINAL_CLASS_COMPILE
 #import "NSStringITerm.h"
+#import <wctype.h>
 
 #define AMB_CHAR_NUMBER (sizeof(ambiguous_chars) / sizeof(int))
 
@@ -71,7 +72,6 @@ static const int ambiguous_chars[] = {
 }
 
 + (BOOL)isDoubleWidthCharacter:(int)unicode
-                      encoding:(NSStringEncoding)e
         ambiguousIsDoubleWidth:(BOOL)ambiguousIsDoubleWidth
 {
     if (unicode <= 0xa0 ||
@@ -260,6 +260,7 @@ static const int ambiguous_chars[] = {
     char *argStart; // The start of the current argument we are processing
     char *copyPos; // The position where we are currently writing characters
     int inQuotes = 0; // Are we inside double quotes?
+    BOOL inWhitespace = NO;  // Last char was whitespace if true
 
     mutableCmdArgs = [[NSMutableArray alloc] init];
 
@@ -283,6 +284,7 @@ static const int ambiguous_chars[] = {
     while ((c = *nextChar++)) {
         switch (c) {
             case '\\':
+                inWhitespace = NO;
                 if (*nextChar == '\0') {
                     // This is the last character, thus this is a malformed
                     // command line, we will just leave the "\" character as a
@@ -293,6 +295,7 @@ static const int ambiguous_chars[] = {
                 *copyPos++ = *nextChar++;
                 break;
             case '\"':
+                inWhitespace = NO;
                 // Time to toggle the quotation mode
                 inQuotes = !inQuotes;
                 // Note: Since we don't copy to/increment copyPos, this
@@ -305,11 +308,18 @@ static const int ambiguous_chars[] = {
                     // We need to copy the current character verbatim.
                     *copyPos++ = c;
                 } else {
-                    // Time to split the command
-                    *copyPos = '\0';
-                    [mutableCmdArgs addObject:[NSString stringWithUTF8String: argStart]];
-                    argStart = nextChar;
-                    copyPos = nextChar;
+                    if (!inWhitespace) {
+                        // Time to split the command
+                        *copyPos = '\0';
+                        [mutableCmdArgs addObject:[NSString stringWithUTF8String:argStart]];
+                        argStart = nextChar;
+                        copyPos = nextChar;
+                        inWhitespace = YES;
+                    } else {
+                        // Skip possible start of next arg when seeing Nth
+                        // consecutive whitespace for N > 1.
+                        ++argStart;
+                    }
                 }
                 break;
             default:
@@ -318,6 +328,7 @@ static const int ambiguous_chars[] = {
                 // case' where copyPos is not offset from the current place we
                 // are reading from. Since this function is called rarely, and
                 // it isn't that slow, we will just ignore the optimisation.
+                inWhitespace = NO;
                 *copyPos++ = c;
                 break;
         }
@@ -364,7 +375,8 @@ static int fromhex(unichar c) {
 - (NSData *)dataFromHexValues
 {
 	NSMutableData *data = [NSMutableData data];
-	for (int i = 0; i < self.length - 1; i+=2) {
+        int length = self.length;  // Convert to signed so length-1 is safe below.
+	for (int i = 0; i < length - 1; i+=2) {
 		const char high = fromhex([self characterAtIndex:i]) << 4;
 		const char low = fromhex([self characterAtIndex:i + 1]);
 		const char b = high | low;
@@ -444,6 +456,206 @@ static int fromhex(unichar c) {
 - (NSString *)stringByEscapingQuotes {
     return [[self stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"]
                stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
+}
+
+// Returns the number of valid bytes in a sequence from a row in table 3-7 of the Unicode 6.2 spec.
+// Returns 0 if no bytes are valid (a true maximal subpart is never less than 1).
+static int maximal_subpart_of_row(const unsigned char *datap,
+                                  int datalen,
+                                  int bytesInRow,
+                                  int *min,  // array of min values, with |bytesInRow| elements.
+                                  int *max)  // array of max values, with |bytesInRow| elements.
+{
+    for (int i = 0; i < bytesInRow && i < datalen; i++) {
+        const int v = datap[i];
+        if (v < min[i] || v > max[i]) {
+            return i;
+        }
+    }
+    return bytesInRow;
+}
+
+// This function finds the longest intial sequence of bytes that look like a valid UTF-8 sequence.
+// It's used to gobble them up and replace them with a <?> replacement mark in an invalid sequence.
+static int minimal_subpart(const unsigned char *datap, int datalen)
+{
+    // This comes from table 3-7 in http://www.unicode.org/versions/Unicode6.2.0/ch03.pdf
+    struct {
+        int numBytes;  // Num values in min, max arrays
+        int min[4];    // Minimum values for each byte in a utf-8 sequence.
+        int max[4];    // Max values.
+    } wellFormedSequencesTable[] = {
+        {
+            1,
+            { 0x00, -1, -1, -1, },
+            { 0x7f, -1, -1, -1, },
+        },
+        {
+            2,
+            { 0xc2, 0x80, -1, -1, },
+            { 0xdf, 0xbf, -1, -1 },
+        },
+        {
+            3,
+            { 0xe0, 0xa0, 0x80, -1, },
+            { 0xe0, 0xbf, 0xbf, -1 },
+        },
+        {
+            3,
+            { 0xe1, 0x80, 0x80, -1, },
+            { 0xec, 0xbf, 0xbf, -1, },
+        },
+        {
+            3,
+            { 0xed, 0x80, 0x80, -1, },
+            { 0xed, 0x9f, 0xbf, -1 },
+        },
+        {
+            3,
+            { 0xee, 0x80, 0x80, -1, },
+            { 0xef, 0xbf, 0xbf, -1, },
+        },
+        {
+            4,
+            { 0xf0, 0x90, 0x80, -1, },
+            { 0xf0, 0xbf, 0xbf, -1, },
+        },
+        {
+            4,
+            { 0xf1, 0x80, 0x80, 0x80, },
+            { 0xf3, 0xbf, 0xbf, 0xbf, },
+        },
+        {
+            4,
+            { 0xf4, 0x80, 0x80, 0x80, },
+            { 0xf4, 0x8f, 0xbf, 0xbf },
+        },
+        { -1, { -1 }, { -1 } }
+    };
+
+    int longest = 0;
+    for (int row = 0; wellFormedSequencesTable[row].numBytes > 0; row++) {
+        longest = MAX(longest,
+                      maximal_subpart_of_row(datap,
+                                             datalen,
+                                             wellFormedSequencesTable[row].numBytes,
+                                             wellFormedSequencesTable[row].min,
+                                             wellFormedSequencesTable[row].max));
+    }
+    return MIN(datalen, MAX(1, longest));
+}
+
+int decode_utf8_char(const unsigned char *datap,
+                     int datalen,
+                     int * restrict result)
+{
+    unsigned int theChar;
+    int utf8Length;
+    unsigned char c;
+    // This maps a utf-8 sequence length to the smallest code point it should
+    // encode (e.g., using 5 bytes to encode an ascii character would be
+    // considered an error).
+    unsigned int smallest[7] = { 0, 0, 0x80UL, 0x800UL, 0x10000UL, 0x200000UL, 0x4000000UL };
+
+    if (datalen == 0) {
+        return 0;
+    }
+
+    c = *datap;
+    if ((c & 0x80) == 0x00) {
+        *result = c;
+        return 1;
+    } else if ((c & 0xE0) == 0xC0) {
+        theChar = c & 0x1F;
+        utf8Length = 2;
+    } else if ((c & 0xF0) == 0xE0) {
+        theChar = c & 0x0F;
+        utf8Length = 3;
+    } else if ((c & 0xF8) == 0xF0) {
+        theChar = c & 0x07;
+        utf8Length = 4;
+    } else if ((c & 0xFC) == 0xF8) {
+        theChar = c & 0x03;
+        utf8Length = 5;
+    } else if ((c & 0xFE) == 0xFC) {
+        theChar = c & 0x01;
+        utf8Length = 6;
+    } else {
+        return -1;
+    }
+    for (int i = 1; i < utf8Length; i++) {
+        if (datalen <= i) {
+            return 0;
+        }
+        c = datap[i];
+        if ((c & 0xc0) != 0x80) {
+            // Expected a continuation character but did not get one.
+            return -i;
+        }
+        theChar = (theChar << 6) | (c & 0x3F);
+    }
+
+    if (theChar < smallest[utf8Length]) {
+        // A too-long sequence was used to encode a value. For example, a 4-byte sequence must encode
+        // a value of at least 0x10000 (it is F0 90 80 80). A sequence like F0 8F BF BF is invalid
+        // because there is a 3-byte sequence to encode U+FFFF (the sequence is EF BF BF).
+        return -minimal_subpart(datap, datalen);
+    }
+
+    // Reject UTF-16 surrogates. They are invalid UTF-8 sequences.
+    // Reject characters above U+10FFFF, as they are also invalid UTF-8 sequences.
+    if ((theChar >= 0xD800 && theChar <= 0xDFFF) || theChar > 0x10FFFF) {
+        return -minimal_subpart(datap, datalen);
+    }
+
+    *result = (int)theChar;
+    return utf8Length;
+}
+
+- (NSString *)initWithUTF8DataIgnoringErrors:(NSData *)data {
+    const unsigned char *p = data.bytes;
+    int len = data.length;
+    int utf8DecodeResult;
+    int theChar = 0;
+    NSMutableData *utf16Data = [NSMutableData data];
+
+    while (len > 0) {
+        utf8DecodeResult = decode_utf8_char(p, len, &theChar);
+        if (utf8DecodeResult == 0) {
+            // Stop on end of stream.
+            break;
+        } else if (utf8DecodeResult < 0) {
+            theChar = UNICODE_REPLACEMENT_CHAR;
+            utf8DecodeResult = -utf8DecodeResult;
+        } else if (theChar > 0xFFFF) {
+            // Convert to surrogate pair.
+           UniChar high, low;
+           high = ((theChar - 0x10000) >> 10) + 0xd800;
+           low = (theChar & 0x3ff) + 0xdc00;
+
+           [utf16Data appendBytes:&high length:sizeof(high)];
+           theChar = low;
+        }
+
+        UniChar c = theChar;
+        [utf16Data appendBytes:&c length:sizeof(c)];
+
+        p += utf8DecodeResult;
+        len -= utf8DecodeResult;
+    }
+
+    return [self initWithData:utf16Data encoding:NSUTF16LittleEndianStringEncoding];
+}
+
+- (NSString *)stringWithOnlyDigits {
+  NSMutableString *s = [NSMutableString string];
+  for (int i = 0; i < self.length; i++) {
+    unichar c = [self characterAtIndex:i];
+    if (iswdigit(c)) {
+      [s appendFormat:@"%c", (char)c];
+    }
+  }
+  return s;
 }
 
 @end

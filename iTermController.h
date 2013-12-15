@@ -28,8 +28,9 @@
  */
 
 #import <Cocoa/Cocoa.h>
-#import <Carbon/Carbon.h>
 #import "ITAddressBookMgr.h"
+
+#define kApplicationDidFinishLaunchingNotification @"kApplicationDidFinishLaunchingNotification"
 
 @class PseudoTerminal;
 @class PTYTextView;
@@ -45,17 +46,7 @@
     id FRONT;
     ItermGrowlDelegate *gd;
 
-    // App-wide hotkey
-    int hotkeyCode_;
-    int hotkeyModifiers_;
-
-    GTMCarbonHotKey* carbonHotKey_;
-
-    CFMachPortRef machPortRef;
-    CFRunLoopSourceRef eventSrc;
     int keyWindowIndexMemo_;
-    BOOL itermWasActiveWhenHotkeyOpened;
-    BOOL rollingIn_;
 
     // For restoring previously active app when exiting hotkey window
     NSNumber *previouslyActiveAppPID_;
@@ -69,12 +60,13 @@
                        bugFix:(unsigned *)bugFix;
 
 + (void)switchToSpaceInBookmark:(NSDictionary*)aDict;
-- (BOOL)rollingInHotkeyTerm;
 
 // actions are forwarded from application
 - (IBAction)newWindow:(id)sender;
+- (void)newWindow:(id)sender possiblyTmux:(BOOL)possiblyTmux;
 - (IBAction)newSessionWithSameProfile:(id)sender;
 - (IBAction)newSession:(id)sender;
+- (void)newSession:(id)sender possiblyTmux:(BOOL)possiblyTmux;
 - (IBAction) previousTerminal:(id)sender;
 - (IBAction) nextTerminal:(id)sender;
 - (void)arrangeHorizontally;
@@ -82,18 +74,11 @@
 - (void)newSessionInWindowAtIndex:(id)sender;
 - (void)showHideFindBar;
 - (PseudoTerminal*)keyTerminalWindow;
-
-- (void)stopEventTap;
+- (BOOL)haveTmuxConnection;
+- (PTYSession *)anyTmuxSession;
 
 - (int)keyWindowIndexMemo;
 - (void)setKeyWindowIndexMemo:(int)i;
-- (void)showHotKeyWindow;
-- (void)doNotOrderOutWhenHidingHotkeyWindow;
-- (void)fastHideHotKeyWindow;
-- (void)hideHotKeyWindow:(PseudoTerminal*)hotkeyTerm;
-- (BOOL)isHotKeyWindowOpen;
-- (void)showNonHotKeyWindowsAndSetAlphaTo:(float)a;
-- (PseudoTerminal*)hotKeyWindow;
 
 - (PseudoTerminal*)terminalWithNumber:(int)n;
 - (int)allocateWindowNumber;
@@ -110,25 +95,21 @@
 - (void)addBookmarksToMenu:(NSMenu *)aMenu withSelector:(SEL)selector openAllSelector:(SEL)openAllSelector startingAt:(int)startingAt;
 - (PseudoTerminal *)openWindow;
 - (id)launchBookmark:(NSDictionary *)bookmarkData
-               inTerminal:(PseudoTerminal *)theTerm
-    disableLionFullscreen:(BOOL)disableLionFullscreen;
+          inTerminal:(PseudoTerminal *)theTerm
+             withURL:(NSString *)url
+            isHotkey:(BOOL)isHotkey
+             makeKey:(BOOL)makeKey;
 - (id)launchBookmark:(NSDictionary*)bookmarkData inTerminal:(PseudoTerminal*)theTerm;
-- (id)launchBookmark:(NSDictionary *)bookmarkData inTerminal:(PseudoTerminal *)theTerm withCommand:(NSString *)command;
-- (id)launchBookmark:(NSDictionary*)bookmarkData
-          inTerminal:(PseudoTerminal*)theTerm
-             withURL:(NSString*)url
-       forObjectType:(iTermObjectType)objectType;
 - (PTYTextView*)frontTextView;
 - (int)numberOfTerminals;
 - (PseudoTerminal*)terminalAtIndex:(int)i;
 - (void)irAdvance:(int)dir;
 - (NSUInteger)indexOfTerminal:(PseudoTerminal*)terminal;
 
-- (BOOL)eventIsHotkey:(NSEvent*)e;
-- (void)unregisterHotkey;
-- (BOOL)haveEventTap;
-- (BOOL)registerHotkey:(int)keyCode modifiers:(int)modifiers;
-- (void)beginRemappingModifiers;
+- (void)dumpViewHierarchy;
+
+- (void)storePreviouslyActiveApp;
+- (void)restorePreviouslyActiveApp;
 
 @end
 

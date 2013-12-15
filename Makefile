@@ -21,21 +21,25 @@ TAGS:
 	find . -name "*.[mhMH]" -exec etags -o ./TAGS -a '{}' +
 
 install: | Deployment backup-old-iterm
-	cp -r build/Deployment/iTerm.app $(APPS)
+	cp -R build/Deployment/iTerm.app $(APPS)
 
 Development:
 	echo "Using PATH for build: $(PATH)"
-	xcodebuild -parallelizeTargets -alltargets -configuration Development && \
+	xcodebuild -parallelizeTargets -target iTerm -configuration Development && \
 	chmod -R go+rX build/Development
 
 Dep:
-	xcodebuild -parallelizeTargets -alltargets -configuration Deployment
+	xcodebuild -parallelizeTargets -target iTerm -configuration Deployment
 
 Deployment:
-	sudo ln -sf /Developer3 /Developer
-	xcodebuild -parallelizeTargets -alltargets -configuration Deployment && \
-	sudo ln -sf /Developer4 /Developer
+	xcodebuild -parallelizeTargets -target iTerm -configuration Deployment && \
 	chmod -R go+rX build/Deployment
+
+Nightly: force
+	cp nightly-iTerm.plist iTerm.plist
+	xcodebuild -parallelizeTargets -target iTerm -configuration Nightly && \
+	git checkout -- iTerm.plist
+	chmod -R go+rX build/Nightly
 
 run: Development
 	build/Development/iTerm.app/Contents/MacOS/iTerm
@@ -66,15 +70,13 @@ restart:
 
 canary:
 	cp canary-iTerm.plist iTerm.plist
-	sudo rm /Developer
-	sudo ln -sf /Developer3 /Developer
 	make Deployment
-	sudo ln -sf /Developer4 /Developer
 	./canary.sh
 
 release:
+	echo "You need to unlock your keychain for signing to work."
+	security unlock-keychain ~/Library/Keychains/login.keychain
 	cp release-iTerm.plist iTerm.plist
-	sudo ln -sf /Developer3 /Developer
 	make Deployment
-	sudo ln -sf /Developer4 /Developer
-	./release.sh
+
+force:

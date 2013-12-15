@@ -17,6 +17,7 @@
 #import "Trigger.h"
 #import "CoprocessTrigger.h"
 #import "SendTextTrigger.h"
+#import "FutureMethods.h"
 
 static NSMutableArray *gTriggerClasses;
 
@@ -28,16 +29,17 @@ static NSMutableArray *gTriggerClasses;
 
 + (void)initialize
 {
+    // The analyzer flags this, but it's just a singleton.
     gTriggerClasses = [[NSMutableArray alloc] init];
-    [gTriggerClasses addObject:[[AlertTrigger alloc] init]];
-    [gTriggerClasses addObject:[[BellTrigger alloc] init]];
-    [gTriggerClasses addObject:[[BounceTrigger alloc] init]];
-    [gTriggerClasses addObject:[[GrowlTrigger alloc] init]];
-    [gTriggerClasses addObject:[[SendTextTrigger alloc] init]];
-    [gTriggerClasses addObject:[[ScriptTrigger alloc] init]];
-    [gTriggerClasses addObject:[[CoprocessTrigger alloc] init]];
-    [gTriggerClasses addObject:[[MuteCoprocessTrigger alloc] init]];
-    [gTriggerClasses addObject:[[HighlightTrigger alloc] init]];
+    [gTriggerClasses addObject:[[[AlertTrigger alloc] init] autorelease]];
+    [gTriggerClasses addObject:[[[BellTrigger alloc] init] autorelease]];
+    [gTriggerClasses addObject:[[[BounceTrigger alloc] init] autorelease]];
+    [gTriggerClasses addObject:[[[GrowlTrigger alloc] init] autorelease]];
+    [gTriggerClasses addObject:[[[SendTextTrigger alloc] init] autorelease]];
+    [gTriggerClasses addObject:[[[ScriptTrigger alloc] init] autorelease]];
+    [gTriggerClasses addObject:[[[CoprocessTrigger alloc] init] autorelease]];
+    [gTriggerClasses addObject:[[[MuteCoprocessTrigger alloc] init] autorelease]];
+    [gTriggerClasses addObject:[[[HighlightTrigger alloc] init] autorelease]];
 
     [gTriggerClasses sortUsingSelector:@selector(compareTitle:)];
 }
@@ -102,7 +104,7 @@ static NSMutableArray *gTriggerClasses;
 - (NSArray *)triggers
 {
     Profile *bookmark = [self bookmark];
-    NSDictionary *triggers = [bookmark objectForKey:KEY_TRIGGERS];
+    NSArray *triggers = [bookmark objectForKey:KEY_TRIGGERS];
     return triggers ? triggers : [NSArray array];
 }
 
@@ -276,12 +278,20 @@ static NSMutableArray *gTriggerClasses;
             if ([trigger paramIsPopupButton]) {
                 NSPopUpButtonCell *cell = [[[NSPopUpButtonCell alloc] initTextCell:@"" pullsDown:NO] autorelease];
                 NSMenu *theMenu = [cell menu];
-                NSDictionary *items = [trigger menuItemsForPoupupButton];
-                for (NSNumber *n in [trigger tagsSortedByValue]) {
-                    NSString *theTitle = [items objectForKey:n];
-                    NSMenuItem *anItem = [[[NSMenuItem alloc] initWithTitle:theTitle action:nil keyEquivalent:@""] autorelease];
-                    [anItem setTag:[n intValue]];
-                    [theMenu addItem:anItem];
+                BOOL isFirst = YES;
+                for (NSDictionary *items in [trigger groupedMenuItemsForPopupButton]) {
+                    if (!isFirst) {
+                        [theMenu addItem:[NSMenuItem separatorItem]];
+                    }
+                    isFirst = NO;
+                    for (NSNumber *n in [trigger tagsSortedByValueInDict:items]) {
+                        NSString *theTitle = [items objectForKey:n];
+                        if (theTitle) {
+                            NSMenuItem *anItem = [[[NSMenuItem alloc] initWithTitle:theTitle action:nil keyEquivalent:@""] autorelease];
+                            [anItem setTag:[n intValue]];
+                            [theMenu addItem:anItem];
+                        }
+                    }
                 }
                 [cell setBordered:NO];
                 return cell;
@@ -310,6 +320,13 @@ static NSMutableArray *gTriggerClasses;
 - (IBAction)help:(id)sender
 {
     [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"http://www.iterm2.com/triggers.html"]];
+}
+
+#pragma mark NSWindowDelegate
+
+- (void)windowWillClose:(NSNotification *)notification
+{
+    [tableView_ reloadData];
 }
 
 @end
